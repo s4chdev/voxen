@@ -332,3 +332,54 @@ speaker-based user will hear echo until AEC exists.
 Service supervision (phase 7) is the highest-value remaining item: calls still
 end when the terminal closes. Then speaking indicators and per-peer mute, then
 AEC/NS.
+
+---
+
+## Progress update: service supervision (phase 7, Linux verified)
+
+`voxen start` detaches a daemon that dies with the login session and never comes
+back after a crash. `voxen service install` now puts voxend under the platform's
+*per-user* supervisor, which is the difference between a tool you run and a tool
+you have.
+
+### Delivered
+
+| Item | Evidence |
+|---|---|
+| `voxen service install/status/uninstall` | `internal/cli/service.go` |
+| systemd user unit generation | `internal/service/systemd.go` |
+| launchd LaunchAgent generation | `internal/service/launchd.go` |
+| Windows logon task generation | `internal/service/windows.go` |
+| Real systemd lifecycle test | `TestSystemdServiceLifecycle` (opt-in) |
+| Unit content regression tests | `internal/service/service_test.go` |
+
+### Recommendations that were wrong, and why
+
+The packaging templates existed before this phase and had never been run. Both
+planted assumptions failed on first use:
+
+1. **`ProtectSystem=strict`** makes `/run/user/$UID` read-only inside the unit's
+   mount namespace. The daemon could not create its IPC socket:
+   `bind: read-only file system`. Removed, with an explanatory comment so it is
+   not re-added.
+2. **`ReadWritePaths` without the runtime directory** produced
+   `status=226/NAMESPACE` and a restart loop, because the directory did not exist
+   at start. The unit now pre-creates it via `ExecStartPre` and lists it.
+
+A third issue was found by the integration test rather than the unit: the daemon
+started with the environment, then read config by path, but the *socket* came from
+`VOXEN_RUNTIME_DIR`. The supervisor does not inherit the shell, so it and the CLI
+disagreed about the endpoint — the service was running while `voxen status` said it
+was not. The install command now bakes the resolved profile variables into the
+unit.
+
+### Verified on Linux, unverified elsewhere
+
+`VOXEN_TEST_SYSTEMD=1 go test ./tests/integration/ -run TestSystemdServiceLifecycle`
+installs a real unit, checks it is enabled and running, kills the daemon and
+confirms systemd restarts it with a new PID, then uninstalls and confirms nothing
+is left. It passes here.
+
+macOS and Windows generate correct-looking units covered by content tests, but
+neither has been run under a real supervisor. Treat them as unproven until someone
+runs `voxen service install` on those machines.

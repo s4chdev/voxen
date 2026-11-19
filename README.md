@@ -37,6 +37,9 @@ voxen create
 - `voxen identity` / `verify` / `revoke` / `trust` — fingerprint display and
   out-of-band trust management.
 - `voxen mute` / `unmute` — state tracked by the daemon.
+- `voxen service install` / `status` / `uninstall` — supervision under systemd
+  (user unit), launchd (LaunchAgent) or Task Scheduler, so calls survive a crash
+  and start at login. Verified end to end on Linux.
 - Security primitives: signed session statements with DTLS-fingerprint binding,
   deterministic canonical encodings, replay protection, administrator-signed
   room rosters with rollback rejection.
@@ -61,7 +64,7 @@ voxen create
 |---|---|
 | Speaking indicators, per-peer mute | 6 |
 | Explicit admission and removal (`admit` / `remove`) | 6 |
-| systemd / launchd units, Windows service | 7 |
+| launchd and Windows supervision verified on real hardware | needs a run on those hosts |
 | Echo cancellation and noise suppression (config rejects the flags until then) | 8 |
 | Windows/macOS audio verified on real hardware | needs a run on those hosts |
 
@@ -139,6 +142,7 @@ detaches the daemon into its own process group with no console window.
 voxen init --name alice          # create identity + config
 voxen start                      # start the daemon in the background
 voxen status                     # see what is running and what is available
+voxen service install            # optional: start at login, restart on crash
 voxen identity                   # your fingerprint
 voxen doctor                     # diagnostics, including honest gaps
 voxen stop

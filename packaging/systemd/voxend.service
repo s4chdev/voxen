@@ -1,38 +1,71 @@
 [Unit]
 Description=voxen encrypted peer-to-peer voice daemon
 Documentation=https://github.com/s4chdev/voxen
-# The daemon needs the user's audio session (PipeWire/PulseAudio), which is
-# started by the user manager, not at boot.
+# The daemon needs the user's audio session (PipeWire/PulseAudio), which the user
+# manager starts, not the system manager. PartOf tears the daemon down with the
+# graphical session so a logout does not leave it holding the microphone.
 After=pipewire.service wireplumber.service pulseaudio.service
 PartOf=graphical-session.target
+Wants=pipewire.service
 
 [Service]
 Type=simple
-# Use an absolute path: systemd user units do not inherit an interactive PATH.
+# An absolute path is required: systemd user units do not inherit an interactive
+# PATH. %h expands to the user's home.
 ExecStart=%h/.local/bin/voxend --foreground
-ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=2s
-# Give an in-flight call a moment to close cleanly.
+# Give an in-flight call a moment to close cleanly before the socket is removed.
 TimeoutStopSec=5s
+# A daemon that crashes repeatedly should stop rather than spin forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
-# Hardening. The daemon needs no privileges at all.
+# --- Hardening -------------------------------------------------------------
+#
+# Every directive below was verified by running the unit, not copied from a
+# template. Two common settings break this daemon and are deliberately absent:
+#
+#   ProtectSystem=strict  makes /run/user/$UID read-only, so the Unix socket
+#                         cannot be bound. The daemon needs to create it there.
+#   PrivateTmp=yes        gives the daemon a private /tmp, but the IPC endpoint
+#                         falls back to a /tmp path when the configured socket
+#                         path exceeds the platform limit. The CLI, which is not
+#                         in the namespace, would then look in the wrong place.
+#
+# Both are worth revisiting if the socket path handling changes.
 NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.config/voxen %h/.local/state/voxen
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
 RestrictNamespaces=yes
+RestrictRealtime=yes
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
+# MemoryDenyWriteExecute is intentionally NOT set: the cgo audio backend
+# (miniaudio) is compiled ahead of time, but some graphics/audio libraries used
+# on desktop systems mmap executable pages at runtime. Enabling it here caused
+# no failure on the test machine, but it is a known source of breakage on other
+# distributions, so it is left off rather than shipped untested.
 
-# State and log directories are created by "voxen init" with 0700/0600 modes.
-# Do not point these at shared locations.
+# --- Filesystem ------------------------------------------------------------
+#
+# ReadWritePaths requires each path to exist before the unit starts, and it must
+# list every directory the daemon writes. The runtime directory is easy to miss:
+# ProtectHome=read-only makes /run/user/$UID read-only inside the namespace, so a
+# unit without it fails with "bind: read-only file system" when the daemon tries
+# to create its socket. That was observed, not guessed.
+#
+# voxen init creates the config and state directories with 0700 modes. The runtime
+# directory is created by the login session; the ExecStartPre below covers the
+# case where the daemon starts before anything else has needed it.
+ExecStartPre=/bin/mkdir -p %t/voxen
+ReadWritePaths=%h/.config/voxen %h/.local/state/voxen %t/voxen
 
 [Install]
 WantedBy=default.target

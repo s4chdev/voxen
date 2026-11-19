@@ -118,7 +118,8 @@ unverified.
 | State / logs | `$XDG_STATE_HOME/voxen` | `%LOCALAPPDATA%\voxen` | `~/Library/Logs/voxen` |
 | IPC | Unix socket `0600` | named pipe + security descriptor | Unix socket `0600` |
 | Peer check | `SO_PEERCRED` | pipe ACL | `LOCAL_PEERCRED` |
-| Detach | `setsid` | `DETACHED_PROCESS` | `setsid` (launchd in phase 7) |
+| Detach | `setsid` | `DETACHED_PROCESS` | `setsid` |
+| Supervision | systemd user unit | Task Scheduler logon task | LaunchAgent (`Aqua` session) |
 | Audio | PipeWire/PulseAudio (phase 2) | WASAPI via miniaudio (phase 2) | CoreAudio via miniaudio (phase 2) |
 
 All platforms share the same config schema, IPC protocol, signaling protocol,

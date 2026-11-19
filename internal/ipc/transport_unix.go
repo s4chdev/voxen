@@ -4,15 +4,27 @@ package ipc
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 )
 
+// jsonUnmarshal decodes a result payload.
 func jsonUnmarshal(raw []byte, out any) error { return json.Unmarshal(raw, out) }
+
+// maxUnixPathLen is the longest usable Unix socket path on this platform. It is
+// defined per-OS in pathlen_*.go because Linux allows 108 bytes and macOS only
+// 104, including the NUL terminator.
+//
+// A path longer than this cannot be bound at all, so Listen and Dial both map an
+// over-long endpoint to a short, per-user surrogate derived from it. They must
+// agree on that mapping, otherwise the CLI would dial a path the daemon never
+// created.
 
 // Listen opens the local control endpoint. The returned listener verifies the
 // peer's UID on every accepted connection.
@@ -40,7 +52,34 @@ type verifiedListener struct {
 	net.Listener
 }
 
+// resolveEndpoint returns a bindable Unix socket path for endpoint.
+//
+// Long paths are shortened deterministically: the caller's path is hashed and
+// placed in the per-user temp directory. Both the daemon and the CLI derive the
+// same surrogate from the same input, so the endpoint stays addressable without
+// the caller having to know about the platform limit. A short path is returned
+// unchanged.
+func resolveEndpoint(endpoint string) string {
+	if len(endpoint) <= maxUnixPathLen {
+		return endpoint
+	}
+	sum := sha256.Sum256([]byte(endpoint))
+	name := fmt.Sprintf("voxen-%x.sock", sum[:8])
+	short := filepath.Join(os.TempDir(), name)
+	if len(short) <= maxUnixPathLen {
+		return short
+	}
+	// Some environments have a long TMPDIR as well. Fall back to the canonical
+	// temp location, then to a bare name: at this point there is no better
+	// option, and returning something bindable is more useful than failing.
+	if len("/tmp/"+name) <= maxUnixPathLen {
+		return "/tmp/" + name
+	}
+	return name
+}
+
 func listen(endpoint string) (net.Listener, error) {
+	endpoint = resolveEndpoint(endpoint)
 	if err := os.MkdirAll(dirOf(endpoint), 0o700); err != nil {
 		return nil, fmt.Errorf("ipc: create socket directory: %w", err)
 	}
@@ -71,7 +110,7 @@ func listen(endpoint string) (net.Listener, error) {
 }
 
 func dial(ctx context.Context, d *net.Dialer, endpoint string) (net.Conn, error) {
-	conn, err := d.DialContext(ctx, "unix", endpoint)
+	conn, err := d.DialContext(ctx, "unix", resolveEndpoint(endpoint))
 	if err != nil {
 		return nil, err
 	}
@@ -144,15 +183,15 @@ func peerUID(conn net.Conn) (int, error) {
 
 // RemoveEndpoint deletes a Unix socket path, ignoring absence.
 func RemoveEndpoint(endpoint string) error {
-	err := os.Remove(endpoint)
+	err := os.Remove(resolveEndpoint(endpoint))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
 }
 
-// EndpointExists reports whether the endpoint file exists.
+// EndpointExists reports whether the socket file exists.
 func EndpointExists(endpoint string) bool {
-	info, err := os.Stat(endpoint)
+	info, err := os.Stat(resolveEndpoint(endpoint))
 	return err == nil && info.Mode()&os.ModeSocket != 0
 }

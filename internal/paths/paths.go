@@ -163,14 +163,11 @@ func defaultEndpoint(p Paths) string {
 	if runtime.GOOS == "windows" {
 		return PipeName(p.ConfigDir)
 	}
-	endpoint := filepath.Join(p.RuntimeDir, SocketFileName)
-	if len(endpoint) <= maxUnixSocketPath {
-		return endpoint
-	}
-	// Unix domain sockets are limited to ~104 bytes on macOS and 108 on Linux.
-	// Fall back to a short per-user path rather than failing at listen time.
-	shortDir := filepath.Join(os.TempDir(), fmt.Sprintf("%s-%s", AppName, userTag()))
-	return filepath.Join(shortDir, SocketFileName)
+	// Path length is not checked here: an over-long path is mapped to a short
+	// surrogate by the IPC transport, which both the daemon and the CLI apply.
+	// Keeping that logic in one place means a configured custom socket path gets
+	// the same treatment as the default one.
+	return filepath.Join(p.RuntimeDir, SocketFileName)
 }
 
 // PipeName derives a stable named-pipe name for a profile. Hashing the config
@@ -180,8 +177,6 @@ func PipeName(configDir string) string {
 	_, _ = h.Write([]byte(filepath.Clean(configDir)))
 	return fmt.Sprintf(`\\.\pipe\%s-%08x`, AppName, h.Sum32())
 }
-
-const maxUnixSocketPath = 100
 
 // Dir returns the directory that must contain the IPC endpoint.
 func (p Paths) Dir() string {

@@ -5,6 +5,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -62,6 +63,15 @@ func listen(endpoint string) (net.Listener, error) {
 		OutputBufferSize:   64 * 1024,
 	})
 	if err != nil {
+		// A pipe held by a running daemon reports ERROR_ACCESS_DENIED rather
+		// than "already exists", because that daemon's descriptor excluded this
+		// process from the inherited ACE list. Translate it into the same
+		// message the Unix path uses so "voxen start" and operator docs read
+		// consistently, and so a real permission problem is still distinguishable
+		// by the underlying error text.
+		if errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_PIPE_BUSY) {
+			return nil, fmt.Errorf("ipc: %s is already in use by a running daemon", endpoint)
+		}
 		return nil, fmt.Errorf("ipc: listen %s: %w", endpoint, err)
 	}
 	return ln, nil

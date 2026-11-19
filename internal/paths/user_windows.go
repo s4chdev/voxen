@@ -7,8 +7,10 @@ import (
 	"strings"
 )
 
-// userTag is used only for the short temp fallback path, which is not used on
-// Windows. A sanitised user name keeps the value deterministic per account.
+// userTag returns a stable tag for the per-user runtime directory.
+//
+// It is only used for the macOS runtime directory default. A sanitised user name
+// keeps the value deterministic per account.
 func userTag() string {
 	name := os.Getenv("USERNAME")
 	if name == "" {

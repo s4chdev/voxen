@@ -74,12 +74,20 @@ func startDaemon(t *testing.T, prof *profile) func() *ipc.Client {
 	done := make(chan error, 1)
 	go func() { done <- srv.Run(ctx) }()
 
-	// Wait for the socket to accept connections.
+	// Wait for the socket to accept connections. Report why the daemon exited
+	// instead of only timing out: a bind failure is a different bug from a slow
+	// start, and the two used to look identical.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if time.Now().After(deadline) {
 			cancel()
-			t.Fatal("daemon did not start")
+			t.Fatalf("daemon did not start listening on %s within 5s", prof.p.SocketPath)
+		}
+		select {
+		case err := <-done:
+			cancel()
+			t.Fatalf("daemon exited before it was ready: %v", err)
+		default:
 		}
 		conn, err := ipc.Dial(context.Background(), prof.p.SocketPath, 200*time.Millisecond)
 		if err == nil {

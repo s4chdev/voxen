@@ -11,7 +11,9 @@ permissions:
 
 env:
   GOFLAGS: -trimpath
-  CGO_ENABLED: "0"
+  # Do not pin CGO_ENABLED here: the race detector requires cgo, and the
+  # cross-build job needs it disabled. Each step sets what it needs.
+  # CGO_ENABLED="0"
 
 jobs:
   # Fast feedback: formatting, vet and unit tests on one runner.
@@ -57,9 +59,13 @@ jobs:
           cache: true
       - name: unit tests
         shell: bash
-        run: go test -race -short ./internal/...
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./internal/...
       - name: security acceptance tests
         shell: bash
+        env:
+          CGO_ENABLED: "1"
         run: go test -race ./tests/security/...
 
   # Process-level integration tests: build the real binaries and drive them.
@@ -92,6 +98,8 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: build all targets
+        env:
+          CGO_ENABLED: "0"
         run: make cross
 
   # Release artifacts are only produced from a tagged build on main.

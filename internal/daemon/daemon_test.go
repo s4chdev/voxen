@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/s4chdev/voxen/internal/audio"
 	"github.com/s4chdev/voxen/internal/config"
 	"github.com/s4chdev/voxen/internal/daemon"
 	"github.com/s4chdev/voxen/internal/identity"
@@ -168,15 +167,12 @@ func TestDaemonReportsHonestCapabilities(t *testing.T) {
 	if !status.Capabilities.Signaling {
 		t.Fatal("signaling is implemented but not reported as available")
 	}
-	// Audio availability must match whether the backend actually initialised on
-	// this host, not a hardcoded expectation.
-	probe, probeErr := audio.NewMiniAudio(nil)
-	backendOK := probeErr == nil
-	if probe != nil {
-		_ = probe.Close()
-	}
-	if backendOK != status.Capabilities.Audio {
-		t.Fatalf("audio capability %v contradicts backend availability %v", status.Capabilities.Audio, backendOK)
+	// Audio availability reflects whether this host can actually open a
+	// microphone and a speaker. Constructing the backend is not enough: a
+	// container or CI runner enumerates phantom devices that fail to open.
+	usable := hostAudioUsable(t)
+	if usable != status.Capabilities.Audio {
+		t.Fatalf("audio capability %v contradicts host usability %v", status.Capabilities.Audio, usable)
 	}
 	// Group calling is implemented: the mesh tests connect three peers.
 	if !status.Capabilities.Group {

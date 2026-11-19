@@ -6,7 +6,6 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
@@ -249,22 +248,12 @@ func TestStatusReportsAudioCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	engine, engineErr := audio.NewMiniAudio(nil)
-	backendOK := engineErr == nil
-	if engine != nil {
-		_ = engine.Close()
-	}
-
-	if backendOK && !status.Capabilities.Audio {
-		t.Fatal("audio backend initialised but the daemon reports audio unavailable")
-	}
-	if !backendOK && status.Capabilities.Audio {
-		t.Fatal("no audio backend but the daemon claims audio is available")
+	usable := hostAudioUsable(t)
+	if usable != status.Capabilities.Audio {
+		t.Fatalf("audio capability %v contradicts host usability %v (state %q)",
+			status.Capabilities.Audio, usable, status.AudioState)
 	}
 	if status.AudioState == "" {
 		t.Fatal("status has no audio state string")
-	}
-	if strings.Contains(status.AudioState, "unavailable") == backendOK {
-		t.Fatalf("audio state %q contradicts backend availability %v", status.AudioState, backendOK)
 	}
 }

@@ -60,7 +60,7 @@ func newServerForPeers(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 
-	srv, err := New(context.Background(), Options{Paths: p, Foreground: true, Logger: discardLogger()})
+	srv, err := New(context.Background(), Options{Paths: p, Foreground: true, Logger: quietLogger()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,8 +166,8 @@ func TestPeerMuteWithoutRoomIsNotInRoom(t *testing.T) {
 	}
 }
 
-// discardLogger drops all output; these tests exercise state, not log format.
-func discardLogger() *slog.Logger {
+// quietLogger drops all output; this test exercises state, not log format.
+func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 

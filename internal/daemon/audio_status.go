@@ -81,18 +81,27 @@ func (s *Server) startAudio(controller *Controller) {
 			bridge.SetPeerMuted(p.PeerID, true)
 		}
 	}
-	s.bridge = bridge
 	s.controllerMu.Unlock()
 
+	// Start outside the lock, and publish only on success. Publishing first would
+	// let Stop run against a bridge whose devices were still opening, which is how
+	// a failed start turned into a hung shutdown.
 	if err := bridge.Start(context.Background()); err != nil {
 		s.log.Warn("audio did not start; the call will be silent", "error", err)
-		s.controllerMu.Lock()
-		s.bridge = nil
-		s.controllerMu.Unlock()
 		bridge.Stop()
 		return
 	}
-	s.log.Info("call audio is live")
+
+	s.controllerMu.Lock()
+	if s.controller != nil && s.bridge == nil {
+		s.bridge = bridge
+		s.controllerMu.Unlock()
+		s.log.Info("call audio is live")
+		return
+	}
+	s.controllerMu.Unlock()
+	// The room was left while the devices were opening.
+	bridge.Stop()
 }
 
 // stopAudio closes the devices when leaving a room.

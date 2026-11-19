@@ -100,10 +100,11 @@ func (b *AudioBridge) Start(ctx context.Context) error {
 		return audio.ErrUnavailable
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if b.cancel != nil {
+		b.mu.Unlock()
 		return errors.New("audio bridge already started")
 	}
+	b.mu.Unlock()
 
 	openCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -117,15 +118,26 @@ func (b *AudioBridge) Start(ctx context.Context) error {
 		_ = capture.Close()
 		return err
 	}
+	// Publish the streams and cancel func together under the lock. Stop may have
+	// been called while the devices were opening (a failed call, or daemon
+	// shutdown racing the first join); if so, close what was just opened instead
+	// of starting loops nobody will stop.
+	b.mu.Lock()
+	if b.closed.Load() {
+		b.mu.Unlock()
+		_ = capture.Close()
+		_ = playback.Close()
+		return audio.ErrStreamGone
+	}
 	b.capture = capture
 	b.playback = playback
-
 	runCtx, runCancel := context.WithCancel(context.Background())
 	b.cancel = runCancel
+	b.wg.Add(2)
+	b.mu.Unlock()
 
 	// The loops receive their streams explicitly. Reading b.capture/b.playback from
 	// inside them would race Stop, which clears those fields to release the devices.
-	b.wg.Add(2)
 	go func() { defer b.wg.Done(); b.captureLoop(runCtx, capture) }()
 	go func() { defer b.wg.Done(); b.playbackLoop(runCtx, playback) }()
 
@@ -337,7 +349,8 @@ func (b *AudioBridge) Stats() AudioStats {
 	return stats
 }
 
-// Stop closes the devices and waits for the loops to exit.
+// Stop closes the devices and waits for the loops to exit. Safe to call more than
+// once and safe to call while Start is still opening devices.
 func (b *AudioBridge) Stop() {
 	if b.closed.Swap(true) {
 		return

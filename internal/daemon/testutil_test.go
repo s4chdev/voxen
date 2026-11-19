@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -50,3 +52,8 @@ type signerForTest struct{ id *identity.Identity }
 func (s signerForTest) Sign(msg []byte) []byte { return s.id.Sign(msg) }
 
 func (s signerForTest) PublicKey() ed25519.PublicKey { return s.id.PublicKey }
+
+// discardLogger drops all output; tests exercise state, not log format.
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}

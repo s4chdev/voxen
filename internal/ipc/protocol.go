@@ -44,6 +44,7 @@ const (
 	MethodRoomLeave      = "room.leave"
 	MethodRoomAdmit      = "room.admit"
 	MethodRoomRemove     = "room.remove"
+	MethodRoomEvents     = "room.events"
 	MethodSessionICESet  = "session.ice-restart"
 )
 
@@ -166,6 +167,21 @@ type PeerState struct {
 	Muted       bool    `json:"muted"`
 	RTTMillis   int     `json:"rtt_ms,omitempty"`
 	PacketLoss  float64 `json:"packet_loss,omitempty"`
+	// Direct is true when the selected ICE path is not relayed. voxen never
+	// relays, so a false value means no path was established yet.
+	Direct bool `json:"direct"`
+	// LastError explains a failed connection.
+	LastError string `json:"last_error,omitempty"`
+}
+
+// RoomEvent is one lifecycle event in the local ring buffer.
+type RoomEvent struct {
+	At          string `json:"at"`
+	Kind        string `json:"kind"`
+	PeerID      string `json:"peer_id,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Message     string `json:"message,omitempty"`
 }
 
 // StatusResult is the aggregate daemon status.
@@ -330,6 +346,11 @@ type RoomResult struct {
 	Room RoomState `json:"room"`
 	// Invite is populated on create, for sharing out of band.
 	Invite string `json:"invite,omitempty"`
+}
+
+// RoomEventsResult returns the recent lifecycle events.
+type RoomEventsResult struct {
+	Events []RoomEvent `json:"events"`
 }
 
 // RoomLeaveParams leaves the current room.

@@ -14,6 +14,7 @@ import (
 
 	"github.com/s4chdev/voxen/internal/config"
 	"github.com/s4chdev/voxen/internal/ipc"
+	"github.com/s4chdev/voxen/internal/version"
 )
 
 // newDaemonCommand is the hidden entry point used by "voxen start" to re-exec
@@ -64,6 +65,20 @@ easiest way to debug connection problems.`,
 
 			ctx := context.Background()
 			if a.daemonReady(ctx) {
+				// A daemon holding the endpoint may be from an older build, for
+				// example after an upgrade. Saying "already running" would leave
+				// the user talking to a binary that does not have the features
+				// they just installed, which is confusing to debug.
+				var ping ipc.PingResult
+				if err := a.call(ipc.MethodPing, nil, &ping); err == nil {
+					running := ping.Version
+					current := version.Version
+					if !strings.Contains(running, current) && current != "" {
+						fmt.Fprintf(a.stdout, "voxend is already running, but it reports version %q\n", running)
+						fmt.Fprintf(a.stdout, "while this CLI is %q. Restart it with 'voxen restart'.\n", current)
+						return nil
+					}
+				}
 				fmt.Fprintln(a.stdout, "voxend is already running.")
 				return nil
 			}

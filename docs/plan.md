@@ -200,3 +200,47 @@ before the audio backends, which can only be verified on their own platforms.
 Phase 2 (real audio), phase 6 (mesh + room CLI), phase 7 (service supervision),
 phase 8 (multi-host interop). The audio interfaces are unchanged, so phase 2 slots
 in behind `audio.Engine` without touching the security code.
+
+---
+
+## Progress update: room orchestration
+
+The daemon now drives the media mesh that phase 3 built. `voxen create`, `join`,
+`leave` and `peers` work end to end against real binaries.
+
+### Delivered
+
+| Item | Evidence |
+|---|---|
+| Controller joining signaling, room state and media | `internal/daemon/controller.go` |
+| Deterministic offer direction (smaller key offers) | `compareKeys`, controller tests |
+| Answerer adopts the initiator's session ID | `internal/media/sessionid_test.go` |
+| Verified two-peer mesh via real binaries | `TestRealBinariesFormMesh` |
+| Verified three-peer full mesh (2 sessions each) | `TestRealBinariesThreePeerMesh` |
+| Unverified peer refused, with an explanatory event | `TestRealBinariesRefuseUnverifiedPeer` |
+| Fingerprint pins completed on first contact | `peerKey` in `controller.go` |
+
+### Bugs found and fixed
+
+1. **Answerer insisted on its own session ID.** In WebRTC the offer defines the
+   negotiation, so a peer answering an offer it did not generate could never
+   authenticate. The answerer now adopts the offer's ID, with validation and a
+   rule that the ID cannot change once negotiated.
+2. **Existing members were never dialled.** The join handshake consumes the room
+   roster before the relay loop starts, so a peer joining a non-empty room waited
+   forever for a `peer.join` that had already happened. The roster is now passed
+   into activation and dialled explicitly.
+3. **`Stats` raced `Close`.** Pion's `GetStats` reads state that `Close` mutates,
+   and Pion closes the connection internally on DTLS close-notify. Teardown is now
+   daemon-owned (`DisableCloseByDTLS`) and `Stats` is serialised against `Close`.
+4. **Media required a bound key, not a verified fingerprint.** The normal
+   pre-call flow pins a fingerprint before ever seeing the peer, so the mesh could
+   never start. The controller now accepts the advertised key when it hashes to a
+   verified pin, and binds it.
+5. **A fingerprint pin replacing a direct verification** was not handled; both
+   paths now authorise a session, and revoked entries authorise neither.
+
+### Remaining
+
+Phase 2 (real audio) is next. Explicit admission/removal and speaking indicators
+belong with phase 6. Service supervision is phase 7.

@@ -60,6 +60,11 @@ in media and is never trusted: SDP and ICE payloads are opaque to it, and the
 signed statements that authenticate them travel as payload. See
 [protocol.md](protocol.md).
 
+The daemon wires these together in `internal/daemon/controller.go`: it owns the
+signaling connection, the room state machine and one authenticated media session
+per remote peer. Offer direction is deterministic (the lexicographically smaller
+public key offers), so two peers cannot offer simultaneously.
+
 State machine for a room (implemented in `internal/room`):
 
 ```

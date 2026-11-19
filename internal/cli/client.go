@@ -11,7 +11,6 @@ import (
 	"github.com/s4chdev/voxen/internal/identity"
 	"github.com/s4chdev/voxen/internal/ipc"
 	"github.com/s4chdev/voxen/internal/logging"
-	"github.com/s4chdev/voxen/internal/version"
 )
 
 // endpoint resolves the IPC endpoint, preferring the configured value.
@@ -130,15 +129,4 @@ func (a *App) ensureInitialised() error {
 			errors.New("no identity found; run 'voxen init' first"))
 	}
 	return nil
-}
-
-// requirePhase gates a command behind an implemented phase. Commands that
-// describe future work must say so explicitly and exit non-zero, never pretend
-// to work.
-func (a *App) requirePhase(p int, feature string) error {
-	if version.Phase >= p {
-		return nil
-	}
-	return exitWith(ExitUnsupported, fmt.Errorf(
-		"%s is planned for phase %d; this build is phase %d (%s)", feature, p, version.Phase, version.PhaseName))
 }

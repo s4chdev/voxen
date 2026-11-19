@@ -11,6 +11,7 @@ package media
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"time"
 
@@ -180,8 +181,23 @@ type Session interface {
 
 // Manager owns all media sessions for the daemon.
 type Manager interface {
-	// NewSession creates an unnegotiated session bound to an expected peer
-	// identity (the fingerprint verified in the trust store).
-	NewSession(ctx context.Context, expectedFingerprint string) (Session, error)
+	// NewSession creates an unnegotiated session bound to a peer identity and a
+	// room. The peer is named by the fingerprint the local user verified; the
+	// room and session identifiers are bound into the signed statement so a
+	// captured statement cannot be replayed in another context.
+	NewSession(ctx context.Context, spec SessionSpec) (Session, error)
 	Close() error
+}
+
+// SessionSpec identifies one session to create.
+type SessionSpec struct {
+	// RoomID scopes the signed statement to a room.
+	RoomID string
+	// SessionID names this negotiation. The offerer generates it; the answerer
+	// adopts it from the offer.
+	SessionID string
+	// PeerPublicKey is the peer's Ed25519 key, already checked by the caller
+	// against the local trust store. The media plane does not consult trust
+	// itself; it receives a key that the control plane has authorised.
+	PeerPublicKey ed25519.PublicKey
 }

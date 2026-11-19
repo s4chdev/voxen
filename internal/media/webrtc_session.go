@@ -89,7 +89,12 @@ type WebRTCSession struct {
 	decoder *Decoder
 	track   *webrtc.TrackLocalStaticSample
 
-	mu         sync.Mutex
+	mu sync.Mutex
+	// sessionID is the effective negotiation ID. It starts as the configured
+	// value and is replaced by the initiator's ID when this session answers an
+	// offer: in WebRTC the offer defines the negotiation, so the answerer must
+	// adopt it rather than insist on its own.
+	sessionID  string
 	peer       PeerInfo
 	authDone   bool
 	closed     bool
@@ -97,6 +102,12 @@ type WebRTCSession struct {
 	negotiated *Negotiation // remote negotiation, for reference and tests
 	sendMu     sync.Mutex
 	recvCh     chan []int16
+
+	// statsMu serialises Stats against Close. Pion's GetStats reads connection
+	// state that Close mutates, so calling them concurrently is a data race.
+	// It is a separate mutex from mu because Close triggers state callbacks that
+	// take mu; reusing mu here would deadlock.
+	statsMu sync.Mutex
 
 	candHandler func(ICECandidatePayload)
 	authCh      chan struct{}
@@ -160,6 +171,13 @@ func NewWebRTCSession(ctx context.Context, cfg SessionConfig) (*WebRTCSession, e
 	se := webrtc.SettingEngine{}
 	// mDNS candidates are off by default so candidates are explicit and testable.
 	se.SetICEMulticastDNSMode(0)
+	// Let the daemon own teardown. By default Pion closes the PeerConnection from
+	// inside its DTLS goroutine when the peer sends close-notify, which races any
+	// concurrent GetStats call and makes shutdown ordering unpredictable. With
+	// this disabled, a peer's close-notify surfaces as an ICE failure that the
+	// connection-state handler observes, and the controller closes the session
+	// explicitly under statsMu.
+	se.DisableCloseByDTLS(true)
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(me), webrtc.WithSettingEngine(se))
 
 	pc, err := api.NewPeerConnection(webrtc.Configuration{ICEServers: iceServers})
@@ -211,15 +229,16 @@ func NewWebRTCSession(ctx context.Context, cfg SessionConfig) (*WebRTCSession, e
 	}
 
 	s := &WebRTCSession{
-		cfg:     cfg.clone(localFP),
-		log:     logger,
-		pc:      pc,
-		opus:    cfg.Parameters,
-		encoder: encoder,
-		decoder: decoder,
-		track:   track,
-		recvCh:  make(chan []int16, 32),
-		authCh:  make(chan struct{}),
+		cfg:       cfg.clone(localFP),
+		sessionID: cfg.SessionID,
+		log:       logger,
+		pc:        pc,
+		opus:      cfg.Parameters,
+		encoder:   encoder,
+		decoder:   decoder,
+		track:     track,
+		recvCh:    make(chan []int16, 32),
+		authCh:    make(chan struct{}),
 	}
 
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
@@ -262,6 +281,55 @@ func NewWebRTCSession(ctx context.Context, cfg SessionConfig) (*WebRTCSession, e
 
 // LocalFingerprint returns the SHA-256 of the local DTLS certificate.
 func (s *WebRTCSession) LocalFingerprint() [32]byte { return s.cfg.LocalFingerprint }
+
+// SessionID returns the effective negotiation ID.
+func (s *WebRTCSession) SessionID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionID
+}
+
+// adoptSessionID binds this session to the initiator's negotiation ID.
+//
+// Only an offer may set it, and only when the current ID is empty or was
+// supplied by the answerer. The bound is deliberately restrictive: an attacker
+// must not be able to force a session onto a chosen identifier, because a
+// constant ID would make statements easier to correlate and replay across calls.
+func (s *WebRTCSession) adoptSessionID(id string) error {
+	if err := validateSessionID(id); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.authDone || s.negotiated != nil {
+		if s.sessionID != id {
+			return fmt.Errorf("%w: session already bound to %q", security.ErrRoomMismatch, s.sessionID)
+		}
+		return nil
+	}
+	s.sessionID = id
+	return nil
+}
+
+// validateSessionID rejects identifiers that are empty, oversized, or contain
+// characters that would corrupt logs or the wire format.
+func validateSessionID(id string) error {
+	if id == "" {
+		return errors.New("media: session id is empty")
+	}
+	if len(id) > 128 {
+		return errors.New("media: session id is longer than 128 bytes")
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '-', r == '_', r == '.':
+		default:
+			return fmt.Errorf("media: session id contains an invalid character %q", r)
+		}
+	}
+	return nil
+}
 
 func (cfg SessionConfig) clone(fp [32]byte) SessionConfig {
 	cfg.LocalFingerprint = fp
@@ -325,8 +393,9 @@ func (s *WebRTCSession) CreateOffer(ctx context.Context) (*Negotiation, error) {
 		return nil, fmt.Errorf("media: set local description: %w", err)
 	}
 
+	sid := s.SessionID()
 	stmt, err := security.NewSessionStatement(
-		s.cfg.RoomID, s.cfg.SessionID,
+		s.cfg.RoomID, sid,
 		s.cfg.LocalIdentity.PublicKey(), s.cfg.LocalFingerprint,
 		s.cfg.StatementTTL,
 	)
@@ -342,7 +411,7 @@ func (s *WebRTCSession) CreateOffer(ctx context.Context) (*Negotiation, error) {
 	return &Negotiation{
 		Type:      "offer",
 		SDP:       []byte(local.SDP),
-		SessionID: s.cfg.SessionID,
+		SessionID: sid,
 		Statement: stmt,
 		Signature: sig,
 	}, nil
@@ -353,6 +422,15 @@ func (s *WebRTCSession) CreateOffer(ctx context.Context) (*Negotiation, error) {
 // The statement is checked before the SDP is applied so a peer that cannot prove
 // its identity never influences our state at all.
 func (s *WebRTCSession) AcceptOffer(ctx context.Context, offer *Negotiation) (*Negotiation, PeerInfo, error) {
+	if offer == nil {
+		return nil, PeerInfo{}, ErrStatementNeeded
+	}
+	// The offer defines the negotiation, so adopt its session ID before any
+	// statement is verified against it.
+	if err := s.adoptSessionID(offer.SessionID); err != nil {
+		s.failAuth(err)
+		return nil, PeerInfo{}, err
+	}
 	if err := s.verifyStatement(offer); err != nil {
 		s.failAuth(err)
 		return nil, PeerInfo{}, err
@@ -376,8 +454,9 @@ func (s *WebRTCSession) AcceptOffer(ctx context.Context, offer *Negotiation) (*N
 		return nil, PeerInfo{}, fmt.Errorf("media: set local answer: %w", err)
 	}
 
+	sid := s.SessionID()
 	stmt, err := security.NewSessionStatement(
-		s.cfg.RoomID, s.cfg.SessionID,
+		s.cfg.RoomID, sid,
 		s.cfg.LocalIdentity.PublicKey(), s.cfg.LocalFingerprint,
 		s.cfg.StatementTTL,
 	)
@@ -393,7 +472,7 @@ func (s *WebRTCSession) AcceptOffer(ctx context.Context, offer *Negotiation) (*N
 	return &Negotiation{
 		Type:      "answer",
 		SDP:       []byte(local.SDP),
-		SessionID: s.cfg.SessionID,
+		SessionID: sid,
 		Statement: stmt,
 		Signature: sig,
 	}, PeerInfo{}, nil
@@ -438,15 +517,16 @@ func (s *WebRTCSession) verifyStatement(n *Negotiation) error {
 	if n == nil || n.Statement == nil || len(n.Signature) == 0 {
 		return ErrStatementNeeded
 	}
-	if n.SessionID != s.cfg.SessionID {
+	effective := s.SessionID()
+	if n.SessionID != effective {
 		return fmt.Errorf("%w: negotiation is for session %q, want %q",
-			security.ErrRoomMismatch, n.SessionID, s.cfg.SessionID)
+			security.ErrRoomMismatch, n.SessionID, effective)
 	}
 	policy := security.StatementPolicy{
 		MaxClockSkew:    time.Minute,
 		MaxLifetime:     s.cfg.StatementTTL + time.Minute,
 		ExpectedRoom:    s.cfg.RoomID,
-		ExpectedSession: s.cfg.SessionID,
+		ExpectedSession: effective,
 		ExpectedIssuer:  s.cfg.ExpectedPeerKey,
 	}
 	if err := n.Statement.Verify(n.Signature, policy); err != nil {
@@ -805,8 +885,9 @@ func (s *WebRTCSession) RestartICE(ctx context.Context) (*Negotiation, error) {
 	if err := s.pc.SetLocalDescription(offer); err != nil {
 		return nil, fmt.Errorf("media: set ICE restart description: %w", err)
 	}
+	sid := s.SessionID()
 	stmt, err := security.NewSessionStatement(
-		s.cfg.RoomID, s.cfg.SessionID,
+		s.cfg.RoomID, sid,
 		s.cfg.LocalIdentity.PublicKey(), s.cfg.LocalFingerprint,
 		s.cfg.StatementTTL,
 	)
@@ -818,7 +899,7 @@ func (s *WebRTCSession) RestartICE(ctx context.Context) (*Negotiation, error) {
 	return &Negotiation{
 		Type:      "offer",
 		SDP:       []byte(local.SDP),
-		SessionID: s.cfg.SessionID,
+		SessionID: sid,
 		Statement: stmt,
 		Signature: sig,
 	}, nil
@@ -827,6 +908,8 @@ func (s *WebRTCSession) RestartICE(ctx context.Context) (*Negotiation, error) {
 // Stats reports the live quality snapshot, including proof that the selected
 // candidate pair is a direct path.
 func (s *WebRTCSession) Stats() SessionStats {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
 	var out SessionStats
 	sctp := s.pc.SCTP()
 	if sctp == nil || sctp.Transport() == nil {
@@ -893,7 +976,10 @@ func (s *WebRTCSession) Close() error {
 		s.mu.Lock()
 		s.closed = true
 		s.mu.Unlock()
+		// Take statsMu so an in-flight Stats cannot race the close.
+		s.statsMu.Lock()
 		err = s.pc.Close()
+		s.statsMu.Unlock()
 		close(s.recvCh)
 	})
 	return err

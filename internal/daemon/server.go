@@ -26,7 +26,6 @@ import (
 	"github.com/s4chdev/voxen/internal/paths"
 	"github.com/s4chdev/voxen/internal/room"
 	"github.com/s4chdev/voxen/internal/security"
-	"github.com/s4chdev/voxen/internal/signaling"
 	"github.com/s4chdev/voxen/internal/version"
 )
 
@@ -50,8 +49,11 @@ type Server struct {
 	media    media.Manager
 	replay   *security.ReplayGuard
 
-	signaling *signaling.Client
-	room      *room.Room
+	// controller owns room membership and the media mesh. It is created lazily on
+	// the first room command so a daemon that never places a call does not open a
+	// signaling connection.
+	controller   *Controller
+	controllerMu sync.Mutex
 
 	listener net.Listener
 	started  time.Time
@@ -126,21 +128,6 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("daemon: create media manager: %w", err)
 	}
-	manager.SetPeerKeyResolver(func(fingerprint string) (ed25519.PublicKey, bool) {
-		fp, err := identity.ParseFingerprint(fingerprint)
-		if err != nil {
-			return nil, false
-		}
-		entry, ok := trust.Lookup(fp)
-		if !ok || entry.Level != identity.TrustVerified {
-			return nil, false
-		}
-		pub, err := entry.PublicKeyBytes()
-		if err != nil || pub == nil {
-			return nil, false
-		}
-		return pub, true
-	})
 	s.media = manager
 
 	if ctx.Err() != nil {
@@ -222,10 +209,12 @@ func (s *Server) closeOnce() {
 
 func (s *Server) cleanup() {
 	_ = s.audio.Close()
-	_ = s.media.Close()
-	if s.signaling != nil {
-		_ = s.signaling.Close()
+	s.controllerMu.Lock()
+	if s.controller != nil {
+		s.controller.Close()
 	}
+	s.controllerMu.Unlock()
+	_ = s.media.Close()
 	endpoint := s.cfg.Endpoint(s.opts.Paths)
 	if err := ipc.RemoveEndpoint(endpoint); err != nil {
 		s.log.Warn("could not remove IPC endpoint", "endpoint", endpoint, "error", err)
@@ -366,8 +355,15 @@ func (s *Server) route(ctx context.Context, req *ipc.Request) (any, error) {
 		return s.setMute(req.Params)
 	case ipc.MethodDoctor:
 		return s.doctor(ctx), nil
-	case ipc.MethodRoomCreate, ipc.MethodRoomJoin, ipc.MethodRoomLeave,
-		ipc.MethodRoomAdmit, ipc.MethodRoomRemove, ipc.MethodSessionICESet:
+	case ipc.MethodRoomCreate:
+		return s.roomCreate(ctx, req.Params)
+	case ipc.MethodRoomJoin:
+		return s.roomJoin(ctx, req.Params)
+	case ipc.MethodRoomLeave:
+		return s.roomLeave(req.Params)
+	case ipc.MethodRoomEvents:
+		return ipc.RoomEventsResult{Events: s.roomEvents()}, nil
+	case ipc.MethodRoomAdmit, ipc.MethodRoomRemove, ipc.MethodSessionICESet:
 		return nil, ipc.NewError(ipc.CodeUnsupported,
 			"%s is not available in this build (phase %d: %s)", req.Method, version.Phase, version.PhaseName)
 	default:
@@ -377,10 +373,12 @@ func (s *Server) route(ctx context.Context, req *ipc.Request) (any, error) {
 
 func (s *Server) status() ipc.StatusResult {
 	signalingState := "disconnected"
-	if s.signaling != nil {
-		signalingState = string(s.signaling.State())
+	s.controllerMu.Lock()
+	if s.controller != nil {
+		signalingState = s.controller.SignalingState()
 	}
-	_, _, _, peers := s.snapshotRoom()
+	s.controllerMu.Unlock()
+	peers := len(s.peerSnapshot())
 	return ipc.StatusResult{
 		PID:            os.Getpid(),
 		Version:        version.String(),
@@ -416,23 +414,24 @@ func (s *Server) capabilities() ipc.Capabilities {
 }
 
 func (s *Server) roomState() ipc.RoomState {
-	if s.room == nil {
+	s.controllerMu.Lock()
+	c := s.controller
+	s.controllerMu.Unlock()
+	if c == nil {
 		return ipc.RoomState{}
 	}
-	state, role, _, _ := s.room.Snapshot()
-	return ipc.RoomState{
-		InRoom:    state == room.StateActive || state == room.StateJoining,
-		Role:      string(role),
-		JoinState: string(state),
-	}
+	return c.roomState()
 }
 
-func (s *Server) snapshotRoom() (room.State, room.Role, string, int) {
-	if s.room == nil {
-		return room.StateIdle, room.RoleNone, "", 0
+// peerSnapshot returns the current peer list.
+func (s *Server) peerSnapshot() []ipc.PeerState {
+	s.controllerMu.Lock()
+	c := s.controller
+	s.controllerMu.Unlock()
+	if c == nil {
+		return nil
 	}
-	state, role, lastErr, peers := s.room.Snapshot()
-	return state, role, lastErr, len(peers)
+	return c.Peers()
 }
 
 func (s *Server) identityResult() ipc.IdentityResult {
@@ -532,23 +531,7 @@ func (s *Server) revokePeer(params jsonRaw) (any, error) {
 }
 
 func (s *Server) peersList() ipc.PeersResult {
-	if s.room == nil {
-		return ipc.PeersResult{}
-	}
-	_, _, _, list := s.room.Snapshot()
-	out := make([]ipc.PeerState, 0, len(list))
-	for _, p := range list {
-		out = append(out, ipc.PeerState{
-			ID:          p.ID,
-			DisplayName: p.DisplayName,
-			Fingerprint: p.Fingerprint.String(),
-			Verified:    s.trust.IsVerified(p.Fingerprint),
-			Connection:  string(p.State),
-			Speaking:    p.Speaking,
-			Muted:       p.Muted,
-		})
-	}
-	return ipc.PeersResult{Peers: out}
+	return ipc.PeersResult{Peers: s.peerSnapshot()}
 }
 
 func (s *Server) devicesList(ctx context.Context) ipc.DevicesResult {
@@ -640,11 +623,7 @@ func (s *Server) setMute(params jsonRaw) (any, error) {
 		next = !s.muted.Load()
 	}
 	s.muted.Store(next)
-	active := false
-	if s.room != nil {
-		_, _, _, peers := s.room.Snapshot()
-		active = len(peers) > 0
-	}
+	active := len(s.peerSnapshot()) > 0
 	s.log.Info("microphone state changed", "muted", next)
 	return ipc.MuteResult{Muted: next, Active: active}, nil
 }

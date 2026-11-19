@@ -69,6 +69,9 @@ func printStatus(a *App, s ipc.StatusResult) {
 	t.add("signaling", fmt.Sprintf("%s [%s]", s.Signaling, s.SignalingState))
 	t.add("room", room)
 	t.add("peers", fmt.Sprint(s.Peers))
+	if s.Room.InRoom {
+		t.add("room role", s.Room.Role)
+	}
 	t.add("microphone", "muted"+" ("+muted+")")
 	t.add("audio", s.AudioState)
 	// Capability matrix: never leave the user guessing what this build can do.
@@ -153,23 +156,41 @@ func (a *App) newPeersCommand() *cobra.Command {
 				fmt.Fprintln(a.stdout, "No peers. voxen is not in a room, or nobody else has joined yet.")
 				return nil
 			}
-			t := &table{headers: []string{"PEER", "NAME", "FINGERPRINT", "TRUST", "CONNECTION", "MUTE"}}
+			t := &table{headers: []string{"PEER", "NAME", "FINGERPRINT", "TRUST", "CONNECTION", "PATH", "RTT"}}
 			for _, p := range res.Peers {
 				trust := "unverified"
 				if p.Verified {
 					trust = "verified"
 				}
-				mute := ""
-				if p.Muted {
-					mute = "muted"
+				path := "-"
+				switch {
+				case p.Connection == "failed":
+					path = "failed"
+				case p.Direct:
+					path = "direct"
+				case p.Connection == "connected":
+					// Connected without a reported candidate pair is unexpected:
+					// voxen never relays, so this must resolve to direct or fail.
+					path = "unknown"
+				}
+				rtt := "-"
+				if p.RTTMillis > 0 {
+					rtt = fmt.Sprintf("%dms", p.RTTMillis)
 				}
 				name := p.DisplayName
 				if name == "" {
 					name = "-"
 				}
-				t.add(p.ID, name, p.Fingerprint, trust, p.Connection, mute)
+				t.add(p.ID, name, p.Fingerprint, trust, p.Connection, path, rtt)
 			}
 			a.render(t)
+
+			// Explain rejections rather than leaving a bare "failed".
+			for _, p := range res.Peers {
+				if p.LastError != "" {
+					fmt.Fprintf(a.stdout, "\n%s: %s\n", p.ID, p.LastError)
+				}
+			}
 			return nil
 		},
 	}

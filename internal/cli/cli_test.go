@@ -152,18 +152,21 @@ func TestCommandsFailCleanlyWithoutDaemon(t *testing.T) {
 	}
 }
 
-func TestUnimplementedRoomCommandsSaySo(t *testing.T) {
+// TestRoomCommandsNeedADaemon confirms room commands now reach the daemon
+// instead of being gated behind a phase check. Without a daemon they must fail
+// with the actionable "not running" message.
+func TestRoomCommandsNeedADaemon(t *testing.T) {
 	sb := newSandbox(t)
 	if _, errOut, code := sb.execute("init", "--name", "alice"); code != cli.ExitOK {
 		t.Fatalf("init failed: %s", errOut)
 	}
 	for _, args := range [][]string{{"create"}, {"join", "room-1"}} {
 		_, errOut, code := sb.execute(args...)
-		if code != cli.ExitUnsupported {
-			t.Fatalf("%v exit code = %d, want %d (%s)", args, code, cli.ExitUnsupported, errOut)
+		if code != cli.ExitUnavailable {
+			t.Fatalf("%v exit code = %d, want %d (%s)", args, code, cli.ExitUnavailable, errOut)
 		}
-		if !strings.Contains(errOut, "phase") {
-			t.Fatalf("%v should explain the phase gate: %s", args, errOut)
+		if !strings.Contains(errOut, "voxend is not running") {
+			t.Fatalf("%v should tell the user to start the daemon: %s", args, errOut)
 		}
 	}
 }

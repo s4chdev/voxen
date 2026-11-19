@@ -269,7 +269,9 @@ func TestDaemonUnimplementedFeaturesFailExplicitly(t *testing.T) {
 	client := startDaemon(t, prof)
 	c := client()
 
-	for _, method := range []string{ipc.MethodRoomCreate, ipc.MethodRoomJoin, ipc.MethodSessionICESet} {
+	// Room commands exist now; what remains unsupported must still say so
+	// explicitly rather than failing obscurely.
+	for _, method := range []string{ipc.MethodRoomAdmit, ipc.MethodRoomRemove, ipc.MethodSessionICESet} {
 		err := c.Call(&ipc.Request{
 			Version: ipc.ProtocolVersion, ID: "x-" + method, Method: method,
 			Params: mustJSON(t, ipc.RoomCreateParams{Name: "x"}),

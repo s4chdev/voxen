@@ -20,9 +20,6 @@ func (a *App) newCreateCommand() *cobra.Command {
 		Short: "Create a room and invite peers",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := a.requirePhase(4, "room creation"); err != nil {
-				return err
-			}
 			var res ipc.RoomResult
 			err := a.call(ipc.MethodRoomCreate, ipc.RoomCreateParams{
 				Name: name, Private: private, MaxMembers: maxMembers,
@@ -34,9 +31,10 @@ func (a *App) newCreateCommand() *cobra.Command {
 				return a.printJSON(res)
 			}
 			fmt.Fprintf(a.stdout, "Room %s created.\n", res.Room.RoomID)
-			if res.Invite != "" {
-				fmt.Fprintf(a.stdout, "\nShare this invitation with each participant over a channel you trust:\n\n  %s\n", res.Invite)
-			}
+			fmt.Fprintln(a.stdout)
+			fmt.Fprintln(a.stdout, "Share this room ID with each participant. They must verify your")
+			fmt.Fprintln(a.stdout, "fingerprint out of band, then run:")
+			fmt.Fprintf(a.stdout, "\n  voxen join %s\n", res.Room.RoomID)
 			return nil
 		},
 	}
@@ -53,9 +51,6 @@ func (a *App) newJoinCommand() *cobra.Command {
 		Short: "Join an existing room",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := a.requirePhase(4, "joining rooms"); err != nil {
-				return err
-			}
 			var res ipc.RoomResult
 			if err := a.call(ipc.MethodRoomJoin, ipc.RoomJoinParams{RoomID: args[0], Invite: invite}, &res); err != nil {
 				return err
@@ -65,6 +60,7 @@ func (a *App) newJoinCommand() *cobra.Command {
 			}
 			fmt.Fprintf(a.stdout, "Joined room %s.\n", res.Room.RoomID)
 			fmt.Fprintln(a.stdout, "Connecting directly to each participant; no relay server is used.")
+			fmt.Fprintln(a.stdout, "Run 'voxen peers' to watch connections progress.")
 			return nil
 		},
 	}

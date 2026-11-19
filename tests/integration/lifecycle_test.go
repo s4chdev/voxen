@@ -9,7 +9,7 @@
 // is not available in CI (they require a writable temp dir and Unix sockets or
 // named pipes); they do not skip on Linux, macOS or Windows in the project's own
 // workflow.
-package integration
+package integration_test
 
 import (
 	"bytes"
@@ -330,17 +330,20 @@ func TestStartDetachedAndStop(t *testing.T) {
 	t.Fatal("daemon still running after stop")
 }
 
-func TestUnsupportedCommandsExitFour(t *testing.T) {
+// TestRoomCommandsReachTheDaemon confirms create/join are wired to the daemon
+// rather than gated behind a phase check. With no daemon running the CLI must
+// report that clearly instead of claiming the feature does not exist.
+func TestRoomCommandsReachTheDaemon(t *testing.T) {
 	e := newEnv(t)
 	e.mustRun("init", "--name", "tester")
 
 	for _, args := range [][]string{{"create"}, {"join", "room-1"}} {
 		_, errOut, code := e.run(args...)
-		if code != 4 {
-			t.Fatalf("%v exit code = %d, want 4\n%s", args, code, errOut)
+		if code != 3 {
+			t.Fatalf("%v exit code = %d, want 3 (daemon unavailable)\n%s", args, code, errOut)
 		}
-		if !strings.Contains(strings.ToLower(errOut), "phase") {
-			t.Fatalf("%v should explain the phase gate: %s", args, errOut)
+		if !strings.Contains(errOut, "voxend is not running") {
+			t.Fatalf("%v should tell the user to start the daemon: %s", args, errOut)
 		}
 	}
 }

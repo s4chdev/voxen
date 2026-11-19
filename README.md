@@ -19,7 +19,6 @@ voxen create
 >
 > **Not yet implemented: microphone and speaker capture.** Audio currently comes
 > from a generated tone, so voxen cannot yet carry a human voice. That is phase 2.
-> Group calls and the room CLI commands are also still pending.
 > `voxen status` and `voxen doctor` report all of this, and unimplemented commands
 > exit with code `4` instead of pretending.
 
@@ -45,6 +44,10 @@ voxen create
 - **Two-peer encrypted media** — Pion WebRTC, Opus 48 kHz mono, direct SRTP, with
   the peer's Ed25519 identity bound to the DTLS certificate actually negotiated.
   Media is refused until that binding succeeds.
+- **Room orchestration** — `voxen create`, `join`, `leave`, `peers`. The daemon
+  maintains a full mesh: every participant has an independently authenticated
+  session with every other one. A verified three-peer mesh is covered by a test
+  that drives the real binaries.
 - Tests: unit, IPC, daemon, CLI, process-level integration, security acceptance,
   and live two-peer negotiation, all clean under `-race`.
 
@@ -53,8 +56,8 @@ voxen create
 | Feature | Phase |
 |---|---|
 | Microphone/speaker capture (audio is a generated tone) | 2 |
-| Group (mesh) calls | 6 |
-| `create` / `join` / `leave` CLI wiring | 6 |
+| Speaking indicators, per-peer mute | 6 |
+| Explicit admission and removal (`admit` / `remove`) | 6 |
 | systemd / launchd units, Windows service | 7 |
 
 ---

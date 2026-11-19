@@ -24,7 +24,6 @@ type WebRTCManager struct {
 	cfg      ManagerConfig
 	log      *slog.Logger
 	replay   *security.ReplayGuard
-	resolve  func(string) (ed25519.PublicKey, bool)
 	sessions map[*WebRTCSession]struct{}
 	closed   bool
 }
@@ -72,11 +71,17 @@ func NewWebRTCManager(cfg ManagerConfig) (*WebRTCManager, error) {
 // expected key derived from it is what the peer's statement must be signed by.
 // A caller cannot pass an arbitrary key here, which is why this takes the
 // fingerprint string rather than raw key bytes.
-func (m *WebRTCManager) NewSession(ctx context.Context, expectedFingerprint string) (Session, error) {
-	pub, err := m.keyForFingerprint(expectedFingerprint)
-	if err != nil {
+func (m *WebRTCManager) NewSession(ctx context.Context, spec SessionSpec) (Session, error) {
+	if spec.RoomID == "" {
+		return nil, errors.New("media: session requires a room id")
+	}
+	if err := validateSessionID(spec.SessionID); err != nil {
 		return nil, err
 	}
+	if len(spec.PeerPublicKey) != ed25519.PublicKeySize {
+		return nil, ErrNoVerifiedPeer
+	}
+	pub := spec.PeerPublicKey
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -84,13 +89,9 @@ func (m *WebRTCManager) NewSession(ctx context.Context, expectedFingerprint stri
 	}
 	m.mu.Unlock()
 
-	sessionID, err := newSessionID()
-	if err != nil {
-		return nil, err
-	}
 	sess, err := NewWebRTCSession(ctx, SessionConfig{
-		RoomID:          "",
-		SessionID:       sessionID,
+		RoomID:          spec.RoomID,
+		SessionID:       spec.SessionID,
 		LocalIdentity:   m.cfg.Identity,
 		ExpectedPeerKey: pub,
 		Parameters:      m.cfg.Parameters,
@@ -112,36 +113,6 @@ func (m *WebRTCManager) NewSession(ctx context.Context, expectedFingerprint stri
 	m.sessions[sess] = struct{}{}
 	m.mu.Unlock()
 	return sess, nil
-}
-
-// keyForFingerprint is replaced by the daemon with a trust-store lookup. The
-// manager keeps a resolver so the media plane never reads the trust store
-// itself, preserving the package boundary.
-var errNoResolver = errors.New("media: no peer key resolver configured")
-
-// SetPeerKeyResolver installs the identity-plane lookup used to turn a verified
-// fingerprint into a public key.
-func (m *WebRTCManager) SetPeerKeyResolver(fn func(fingerprint string) (ed25519.PublicKey, bool)) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.resolve = fn
-}
-
-func (m *WebRTCManager) keyForFingerprint(fingerprint string) (ed25519.PublicKey, error) {
-	m.mu.Lock()
-	resolve := m.resolve
-	m.mu.Unlock()
-	if resolve == nil {
-		return nil, errNoResolver
-	}
-	pub, ok := resolve(fingerprint)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrNoVerifiedPeer, shorten(fingerprint))
-	}
-	if len(pub) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("%w: key for %s has the wrong length", ErrNoVerifiedPeer, shorten(fingerprint))
-	}
-	return pub, nil
 }
 
 // Sessions returns a snapshot of live sessions.
@@ -175,18 +146,11 @@ func (m *WebRTCManager) Close() error {
 	return errors.Join(errs...)
 }
 
-// newSessionID produces a random identifier that scopes signed statements.
-func newSessionID() (string, error) {
+// NewSessionID produces a random identifier that scopes signed statements.
+func NewSessionID() (string, error) {
 	var buf [16]byte
 	if _, err := rand.Read(buf[:]); err != nil {
 		return "", fmt.Errorf("media: generate session id: %w", err)
 	}
 	return hex.EncodeToString(buf[:]), nil
-}
-
-func shorten(fp string) string {
-	if len(fp) <= 12 {
-		return fp
-	}
-	return fp[:6] + "…" + fp[len(fp)-4:]
 }

@@ -66,6 +66,8 @@ type Server struct {
 	muted    atomic.Bool
 	requests atomic.Uint64
 	active   atomic.Int64
+	// audioUsable caches the startup probe result for the capability matrix.
+	audioUsable atomic.Bool
 
 	mu       sync.Mutex
 	sessions map[string]context.CancelFunc
@@ -132,6 +134,12 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 		return nil, fmt.Errorf("daemon: create media manager: %w", err)
 	}
 	s.media = manager
+
+	// Probe audio once at startup so the capability matrix reflects reality
+	// without opening devices on every status request.
+	if probe := audio.Probe(context.Background(), s.audio); probe.Usable() {
+		s.audioUsable.Store(true)
+	}
 
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -413,13 +421,11 @@ func (s *Server) status() ipc.StatusResult {
 // real; audio capture and group calling are not yet, and saying so is the whole
 // point of this method.
 func (s *Server) capabilities() ipc.Capabilities {
-	// Audio is available only if the backend actually initialised. Reporting it
-	// unconditionally would send a user to debug a "working" feature that silently
-	// produced no sound.
-	audioOK := false
-	if _, ok := s.audio.(audio.Null); !ok {
-		audioOK = s.audio != nil
-	}
+	// Audio availability is probed once at startup and cached. Probing on every
+	// status call would open the microphone repeatedly, which is wasteful and on
+	// some systems audible. doctor re-probes live, so a user diagnosing a problem
+	// still gets an up-to-date answer.
+	audioOK := s.audioUsable.Load()
 	return ipc.Capabilities{
 		Signaling: true,
 		Media:     true,

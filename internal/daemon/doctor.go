@@ -87,33 +87,30 @@ func (s *Server) doctor(ctx context.Context) ipc.DoctorResult {
 		"start a signaling server with 'voxen-signal', then 'voxen create'")
 
 	// Audio.
-	devices, err := s.audio.Devices(ctx)
+	//
+	// Enumeration is not proof: phantom devices enumerate and then fail to open.
+	// The probe opens both directions briefly, so this check reports what a call
+	// would actually experience.
+	probe := audio.Probe(ctx, s.audio)
 	switch {
-	case errors.Is(err, audio.ErrUnavailable):
+	case probe.Backend == "unavailable":
 		add("audio", "unavailable",
 			"no audio backend is available in this build",
-			"rebuild with cgo enabled, or install a working audio server")
-	case err != nil:
-		add("audio", "fail", err.Error(), "check your audio server and device permissions")
+			"rebuild with cgo enabled, and install a working audio server")
+	case probe.Permission:
+		add("audio", "fail",
+			"microphone access was denied",
+			"grant microphone permission to voxen, then re-run 'voxen doctor'")
+	case !probe.Usable():
+		// No hardware: a container or a headless machine. That is not a
+		// misconfiguration, so it must not read as a failure.
+		add("audio", "unavailable",
+			fmt.Sprintf("%s: %d device(s) enumerated but none could be opened", probe.Backend, probe.Devices),
+			"attach a microphone and speaker, or run on a machine with a working audio server")
 	default:
-		inputs, outputs := 0, 0
-		for _, d := range devices {
-			if d.IsInput {
-				inputs++
-			}
-			if d.IsOutput {
-				outputs++
-			}
-		}
-		status := "pass"
-		if inputs == 0 {
-			status = "warn"
-		}
-		if err := s.audioPermissionCheck(ctx); err != nil {
-			add("audio-permission", "warn", err.Error(), "grant microphone access to voxen")
-		}
-		add("audio", status, fmt.Sprintf("%s: %d input, %d output device(s)", s.audio.Version(), inputs, outputs),
-			"run 'voxen devices' for the full list")
+		add("audio", "pass",
+			fmt.Sprintf("%s: capture and playback both open", probe.Backend),
+			"run 'voxen devices' to list them")
 	}
 
 	// Clock: signed statements depend on reasonable time synchronisation.
@@ -138,25 +135,6 @@ func (s *Server) doctor(ctx context.Context) ipc.DoctorResult {
 		}
 	}
 	return ipc.DoctorResult{Checks: checks, OK: ok}
-}
-
-// audioPermissionCheck opens the default microphone briefly to prove permission
-// was granted. A denied microphone is the most common cause of a silent call, and
-// it is invisible from device enumeration alone.
-func (s *Server) audioPermissionCheck(ctx context.Context) error {
-	if _, ok := s.audio.(audio.Null); ok {
-		return nil
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	stream, err := s.audio.OpenCapture(probeCtx, "")
-	if err != nil {
-		if errors.Is(err, audio.ErrPermission) {
-			return err
-		}
-		return nil
-	}
-	return stream.Close()
 }
 
 func (s *Server) identityPath() string {

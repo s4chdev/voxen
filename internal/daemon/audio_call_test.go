@@ -25,24 +25,7 @@ import (
 // It skips when the host has no working audio backend, because a headless CI
 // runner legitimately has none.
 func TestRealCallCarriesAudio(t *testing.T) {
-	// Confirm the machine can actually capture and play before asserting on it.
-	probe, err := audio.NewMiniAudio(nil)
-	if err != nil {
-		t.Skipf("no audio backend: %v", err)
-	}
-	devices, err := probe.Devices(context.Background())
-	_ = probe.Close()
-	if err != nil || len(devices) == 0 {
-		t.Skip("no audio devices present")
-	}
-	var hasInput, hasOutput bool
-	for _, d := range devices {
-		hasInput = hasInput || d.IsInput
-		hasOutput = hasOutput || d.IsOutput
-	}
-	if !hasInput || !hasOutput {
-		t.Skip("host has no usable microphone and speaker pair")
-	}
+	requireUsableAudio(t)
 
 	url := startSignaling(t)
 	_, clients := twoProfiles(t, url)
@@ -106,6 +89,29 @@ func TestRealCallCarriesAudio(t *testing.T) {
 	t.Fatalf("audio did not flow both ways: alice=%+v bob=%+v", aliceStats, bobStats)
 }
 
+// requireUsableAudio skips the test unless this host can actually open both a
+// microphone and a speaker.
+//
+// Enumeration alone is not enough: CI runners list phantom devices that then fail
+// to open, so a test that trusted enumeration would fail rather than skip on
+// hardware that genuinely cannot carry a call.
+func requireUsableAudio(t *testing.T) {
+	t.Helper()
+	engine, err := audio.NewMiniAudio(nil)
+	if err != nil {
+		t.Skipf("no audio backend: %v", err)
+	}
+	defer engine.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	probe := audio.Probe(ctx, engine)
+	if !probe.Usable() {
+		t.Skipf("host cannot open audio devices (backend=%s, devices=%d, capture=%v, playback=%v): %v",
+			probe.Backend, probe.Devices, probe.CaptureOK, probe.PlaybackOK, probe.Err)
+	}
+}
+
 func audioStatus(t *testing.T, c *ipc.Client, name string) ipc.AudioStatus {
 	t.Helper()
 	var status ipc.StatusResult
@@ -120,15 +126,7 @@ func audioStatus(t *testing.T, c *ipc.Client, name string) ipc.AudioStatus {
 // TestMuteDuringCallStopsVoiceAndResumes proves mute works on a live call: the
 // bridge keeps transmitting (so the timeline survives) but sends silence.
 func TestMuteDuringCallStopsVoiceAndResumes(t *testing.T) {
-	probe, err := audio.NewMiniAudio(nil)
-	if err != nil {
-		t.Skipf("no audio backend: %v", err)
-	}
-	devices, derr := probe.Devices(context.Background())
-	_ = probe.Close()
-	if derr != nil || len(devices) == 0 {
-		t.Skip("no audio devices present")
-	}
+	requireUsableAudio(t)
 
 	url := startSignaling(t)
 	_, clients := twoProfiles(t, url)

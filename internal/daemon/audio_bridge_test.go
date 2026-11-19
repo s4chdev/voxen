@@ -57,6 +57,22 @@ func (f *fakeSession) ReceivePCM(ctx context.Context, pcm []int16) (int, error) 
 
 // Tests only need these; the rest of the interface is unused.
 
+// usableEngine returns an engine only if this host can actually open devices.
+func usableEngine(t *testing.T) *audio.MiniAudio {
+	t.Helper()
+	engine, err := audio.NewMiniAudio(nil)
+	if err != nil {
+		t.Skipf("no audio backend: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if probe := audio.Probe(ctx, engine); !probe.Usable() {
+		_ = engine.Close()
+		t.Skipf("host cannot open audio devices: %v", probe.Err)
+	}
+	return engine
+}
+
 func (f *fakeSession) CreateOffer(context.Context) (*media.Negotiation, error) {
 	return nil, nil
 }
@@ -78,10 +94,7 @@ func (f *fakeSession) Close() error                                           { 
 // TestAudioBridgeForwardsMicrophoneToPeers proves the capture path: what arrives
 // from the microphone is delivered to every authenticated peer.
 func TestAudioBridgeForwardsMicrophoneToPeers(t *testing.T) {
-	engine, err := audio.NewMiniAudio(nil)
-	if err != nil {
-		t.Skipf("no audio backend: %v", err)
-	}
+	engine := usableEngine(t)
 	defer engine.Close()
 
 	sessions := []*fakeSession{newFakeSession(), newFakeSession()}
@@ -118,10 +131,7 @@ func TestAudioBridgeForwardsMicrophoneToPeers(t *testing.T) {
 // TestAudioBridgeMixiesPeersIntoPlayback proves the receive path: audio arriving
 // from peers is summed and written to the speaker.
 func TestAudioBridgeMixesPeersIntoPlayback(t *testing.T) {
-	engine, err := audio.NewMiniAudio(nil)
-	if err != nil {
-		t.Skipf("no audio backend: %v", err)
-	}
+	engine := usableEngine(t)
 	defer engine.Close()
 
 	a := newFakeSession()
@@ -176,10 +186,7 @@ func TestAudioBridgeMixesPeersIntoPlayback(t *testing.T) {
 // TestAudioBridgeMuteSendsSilence proves muting removes the local voice without
 // stopping transmission, so receivers keep their timeline.
 func TestAudioBridgeMuteSendsSilence(t *testing.T) {
-	engine, err := audio.NewMiniAudio(nil)
-	if err != nil {
-		t.Skipf("no audio backend: %v", err)
-	}
+	engine := usableEngine(t)
 	defer engine.Close()
 
 	sess := newFakeSession()

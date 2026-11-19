@@ -224,11 +224,13 @@ func (s *Server) closeOnce() {
 
 func (s *Server) cleanup() {
 	s.controllerMu.Lock()
-	if s.bridge != nil {
-		s.bridge.Stop()
-		s.bridge = nil
-	}
+	bridge := s.bridge
+	s.bridge = nil
 	s.controllerMu.Unlock()
+	if bridge != nil {
+		// Bounded: a wedged audio driver must not stop the process exiting.
+		s.stopAudioAsync(bridge)
+	}
 	_ = s.audio.Close()
 	s.controllerMu.Lock()
 	if s.controller != nil {

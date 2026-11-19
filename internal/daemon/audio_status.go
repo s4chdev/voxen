@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"time"
 
 	"github.com/s4chdev/voxen/internal/audio"
 	"github.com/s4chdev/voxen/internal/ipc"
@@ -83,25 +84,15 @@ func (s *Server) startAudio(controller *Controller) {
 	}
 	s.controllerMu.Unlock()
 
-	// Start outside the lock, and publish only on success. Publishing first would
-	// let Stop run against a bridge whose devices were still opening, which is how
-	// a failed start turned into a hung shutdown.
-	if err := bridge.Start(context.Background()); err != nil {
-		s.log.Warn("audio did not start; the call will be silent", "error", err)
-		bridge.Stop()
-		return
-	}
-
-	s.controllerMu.Lock()
-	if s.controller != nil && s.bridge == nil {
-		s.bridge = bridge
-		s.controllerMu.Unlock()
-		s.log.Info("call audio is live")
-		return
-	}
-	s.controllerMu.Unlock()
-	// The room was left while the devices were opening.
-	bridge.Stop()
+	// Opening audio devices is a blocking OS call that can take seconds, or hang
+	// outright when a platform has no audio service. It must not run on the IPC
+	// handler that is answering "voxen join", and it must not be able to delay
+	// daemon shutdown, so it happens in its own goroutine with a deadline.
+	//
+	// The call is fully usable meanwhile: the mesh and the authenticated media
+	// sessions are already up, and "voxen status" reports audio as not running
+	// until this finishes.
+	go s.openAudioAsync(bridge, controller)
 }
 
 // stopAudio closes the devices when leaving a room.
@@ -111,7 +102,7 @@ func (s *Server) stopAudio() {
 	s.bridge = nil
 	s.controllerMu.Unlock()
 	if bridge != nil {
-		bridge.Stop()
+		s.stopAudioAsync(bridge)
 		s.log.Info("call audio stopped")
 	}
 }
@@ -177,4 +168,50 @@ func (s *Server) setPeerMute(params jsonRaw) (any, error) {
 	s.setPeerMuted(p.PeerID, next)
 	s.log.Info("participant mute changed", "peer", p.PeerID, "muted", next)
 	return ipc.PeerMuteResult{PeerID: p.PeerID, Muted: next}, nil
+}
+
+// openAudioAsync opens the audio devices for a call without blocking the caller.
+func (s *Server) openAudioAsync(bridge *AudioBridge, controller *Controller) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := bridge.Start(ctx); err != nil {
+		s.log.Warn("audio did not start; the call will be silent", "error", err)
+		bridge.Stop()
+		return
+	}
+
+	// Publish only on success, and only if this bridge is still the current one: the
+	// room may have been left while the devices were opening.
+	s.controllerMu.Lock()
+	current := s.controller
+	already := s.bridge != nil
+	if current == controller && !already {
+		s.bridge = bridge
+		s.controllerMu.Unlock()
+		s.log.Info("call audio is live")
+		return
+	}
+	s.controllerMu.Unlock()
+	bridge.Stop()
+}
+
+// audioStopTimeout bounds how long shutdown waits for audio teardown.
+//
+// A wedged driver must not prevent the process from exiting; the OS reclaims the
+// device when the process dies.
+const audioStopTimeout = 3 * time.Second
+
+// stopAudioAsync closes the devices without blocking the caller.
+func (s *Server) stopAudioAsync(bridge *AudioBridge) {
+	done := make(chan struct{})
+	go func() {
+		bridge.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(audioStopTimeout):
+		s.log.Warn("audio teardown timed out; continuing shutdown")
+	}
 }

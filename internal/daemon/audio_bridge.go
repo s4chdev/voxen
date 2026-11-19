@@ -63,8 +63,11 @@ type AudioBridge struct {
 	framesMixed    atomic.Uint64
 
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	closed atomic.Bool
+	// lifeCancel aborts an in-flight device open, so Stop is not held hostage by a
+	// driver that never returns.
+	lifeCancel context.CancelFunc
+	wg         sync.WaitGroup
+	closed     atomic.Bool
 }
 
 // AudioBridgeConfig configures the bridge.
@@ -104,9 +107,28 @@ func (b *AudioBridge) Start(ctx context.Context) error {
 		b.mu.Unlock()
 		return errors.New("audio bridge already started")
 	}
+	// A context owned by the bridge, so Stop can abort a device open that is in
+	// flight. Without this, a wedged driver keeps Start blocked until its own
+	// timeout even though the caller has already given up.
+	lifeCtx, lifeCancel := context.WithCancel(ctx)
+	// started flips to true only on the success path, where ownership of the
+	// lifecycle context passes to Stop.
+	started := false
+	defer func() {
+		if started {
+			return
+		}
+		// Start is returning without a live bridge: release the context and clear
+		// the field so a later Start is not blocked by a stale cancel func.
+		lifeCancel()
+		b.mu.Lock()
+		b.lifeCancel = nil
+		b.mu.Unlock()
+	}()
+	b.lifeCancel = lifeCancel
 	b.mu.Unlock()
 
-	openCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	openCtx, cancel := context.WithTimeout(lifeCtx, 10*time.Second)
 	defer cancel()
 
 	capture, err := b.engine.OpenCapture(openCtx, audio.DeviceID(b.cfg.InputDevice))
@@ -133,6 +155,8 @@ func (b *AudioBridge) Start(ctx context.Context) error {
 	b.playback = playback
 	runCtx, runCancel := context.WithCancel(context.Background())
 	b.cancel = runCancel
+	// Ownership of the lifecycle context passes to Stop from here on.
+	started = true
 	b.wg.Add(2)
 	b.mu.Unlock()
 
@@ -357,27 +381,49 @@ func (b *AudioBridge) Stop() {
 	}
 	b.mu.Lock()
 	cancel := b.cancel
+	// Cancel the lifecycle context first: this aborts a device open that Start is
+	// still waiting on, which is what lets Stop return promptly on a wedged driver.
+	lifeCancel := b.lifeCancel
 	capture := b.capture
 	playback := b.playback
 	b.cancel = nil
+	b.lifeCancel = nil
 	b.capture = nil
 	b.playback = nil
 	b.mu.Unlock()
 
+	if lifeCancel != nil {
+		lifeCancel()
+	}
 	if cancel != nil {
 		cancel()
 	}
-	b.wg.Wait()
-
-	// Streams own their device lifetime, so closing them is what frees the
-	// backend resources.
+	// Close the streams before waiting: a loop blocked in ReadFrames may be waiting
+	// on a device that only unblocks when the device is closed. This is also what
+	// frees the backend resources, since streams own their device.
 	if capture != nil {
 		_ = capture.Close()
 	}
 	if playback != nil {
 		_ = playback.Close()
 	}
+
+	// Wait for the loops, but never forever. A wedged driver must not prevent the
+	// process from exiting; the OS reclaims the device when the process dies.
+	done := make(chan struct{})
+	go func() {
+		b.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(stopWaitTimeout):
+		b.log.Warn("audio loops did not stop in time; continuing teardown")
+	}
 }
+
+// stopWaitTimeout bounds how long Stop waits for its loops to exit.
+const stopWaitTimeout = 2 * time.Second
 
 // SetObserver installs the speech-state callback. Safe to call before or during a
 // call; a nil observer disables reporting.

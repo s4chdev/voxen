@@ -72,12 +72,18 @@ func TestSystemdUnitContent(t *testing.T) {
 }
 
 // TestLaunchdPlistContent checks the generated agent.
+//
+// It renders on every platform so the template is validated everywhere, but the
+// log paths are built with filepath.Join, which uses the *host* separator. On
+// Windows that produces backslashes inside a plist that only ever runs on macOS,
+// so the assertion is made separator-agnostic rather than skipping the check.
 func TestLaunchdPlistContent(t *testing.T) {
 	m := &launchdManager{}
 	plist := m.render(Options{
 		Binary: "/opt/voxen/voxend",
 		Config: "/Users/u/.config/voxen/config.yaml",
 	}, "/Users/u/Library/Logs/voxen")
+	normalised := strings.ReplaceAll(plist, "\\", "/")
 
 	for _, want := range []string{
 		"<string>" + launchdLabel + "</string>",
@@ -87,7 +93,7 @@ func TestLaunchdPlistContent(t *testing.T) {
 		"<string>Aqua</string>", // needs an interactive audio session
 		"/Users/u/Library/Logs/voxen/voxend.err.log",
 	} {
-		if !strings.Contains(plist, want) {
+		if !strings.Contains(normalised, want) {
 			t.Fatalf("plist missing %q", want)
 		}
 	}

@@ -387,6 +387,9 @@ func TestDaemonRejectsStaleConfigReload(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Daemon.Socket = filepath.Join(prof.dir, "other.sock")
+	if runtime.GOOS == "windows" {
+		cfg.Daemon.Socket = paths.PipeName(filepath.Join(prof.dir, "other"))
+	}
 	if err := config.Save(prof.p.ConfigFile, cfg); err != nil {
 		t.Fatal(err)
 	}

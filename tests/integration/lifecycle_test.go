@@ -15,7 +15,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -448,5 +447,8 @@ func TestNoSecretsInLogs(t *testing.T) {
 			t.Fatal("private key seed leaked into the log file")
 		}
 	}
-	fmt.Fprint(&bytes.Buffer{}, text) // keep the variable meaningful
+	// The fingerprint is public and must be present, proving the log is real.
+	if !strings.Contains(text, "voxend started") {
+		t.Fatalf("log file does not contain the startup line:\n%s", text)
+	}
 }

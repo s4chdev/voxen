@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -79,7 +80,9 @@ func TestStorePlainRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows has no POSIX mode bits; identity protection there rests on the
+	// per-user profile ACL, which paths.CheckPermissions treats as out of scope.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("key file mode = %04o, want 0600", info.Mode().Perm())
 	}
 
@@ -107,6 +110,9 @@ func TestCreateRefusesOverwrite(t *testing.T) {
 }
 
 func TestStoreRejectsLoosePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits do not apply; the per-user profile ACL is the boundary")
+	}
 	path := filepath.Join(t.TempDir(), "identity.json")
 	store := NewStore(path, nil)
 	if _, err := store.Create("alice"); err != nil {
@@ -255,12 +261,15 @@ func TestTrustStoreLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("trust store mode = %04o, want 0600", info.Mode().Perm())
 	}
 }
 
 func TestTrustStoreRejectsLoosePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits do not apply; the per-user profile ACL is the boundary")
+	}
 	dir := t.TempDir()
 	ts, err := OpenTrust(dir)
 	if err != nil {

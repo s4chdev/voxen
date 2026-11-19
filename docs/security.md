@@ -22,10 +22,11 @@ negotiates two live PeerConnections, completes the binding and passes audio.
 `TestMaliciousRelayCannotSubstituteFingerprint` and its siblings attack that path
 and are rejected.
 
-**Still not implemented: microphone and speaker capture.** Audio currently comes
-from a generated tone, so voxen cannot yet be used for a real conversation. The
-platform audio backends are phase 2. `voxen doctor` and `voxen status` report this
-honestly.
+**Audio capture and playback are now real.** Microphone input is encoded with
+Opus and sent only over the authenticated DTLS-SRTP path; incoming peer audio is
+decoded and mixed to the speaker. `TestRealCallCarriesAudio` runs two daemons with
+real devices and asserts that frames move in both directions, which cannot happen
+unless the identity binding completed first.
 
 ---
 

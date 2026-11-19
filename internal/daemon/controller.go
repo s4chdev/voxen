@@ -755,6 +755,23 @@ func (c *Controller) roomState() ipc.RoomState {
 	}
 }
 
+// Sessions returns the live media sessions, for the audio bridge to fan out to.
+//
+// Only authenticated sessions are returned: sending to a session before the
+// identity binding completes is refused by the session itself, but excluding it
+// here avoids pointless work and keeps the capture loop cheap.
+func (c *Controller) Sessions() []media.Session {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]media.Session, 0, len(c.sessions))
+	for _, ps := range c.sessions {
+		if ps.session != nil && ps.state == room.ConnConnected {
+			out = append(out, ps.session)
+		}
+	}
+	return out
+}
+
 // Peers reports per-peer state for IPC.
 func (c *Controller) Peers() []ipc.PeerState {
 	c.mu.Lock()

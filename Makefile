@@ -77,37 +77,50 @@ tidy:
 	$(GO) mod tidy
 	$(GO) mod verify
 
-## cross: compile for every supported platform (verifies build tags)
+## cross: compile for every supported platform without cgo.
+#
+# This proves the pure-Go code and all build tags are sound everywhere. It does
+# NOT produce audio-capable binaries: miniaudio requires cgo, so a CGO_ENABLED=0
+# build reports audio as unavailable. Use "make dist" for releases, which builds
+# each platform with its native toolchain.
 cross:
 	@set -e; \
 	for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; ext=""; \
 		if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
 		echo "building $$target"; \
-		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build $(GOFLAGS) \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=$$cgo $(GO) build $(GOFLAGS) \
 			-ldflags '$(LDFLAGS)' -o /dev/null ./... ; \
 	done
 
-## dist: build release archives for every supported platform
-dist: cross
+## dist: build release archives.
+#
+# Audio requires cgo, so a cross-compiled cgo build needs a cross C toolchain per
+# target. Rather than ship silent binaries, dist builds natively for the host and
+# cross-builds the rest with cgo disabled, naming those archives "-nocgo" so the
+# limitation is visible in the filename.
+dist:
 	@mkdir -p $(DIST_DIR)
 	@set -e; \
 	for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do \
 		os=$${target%/*}; arch=$${target#*/}; ext=""; \
 		if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
-		stage=$(DIST_DIR)/voxen-$(VERSION)-$$os-$$arch; \
+		cgo=0; tag="-nocgo"; \
+		if [ "$$os" = "$(shell $(GO) env GOOS)" ] && [ "$$arch" = "$(shell $(GO) env GOARCH)" ]; then cgo=1; tag=""; fi; \
+		stage=$(DIST_DIR)/voxen-$(VERSION)-$$os-$$arch$$tag; \
 		rm -rf $$stage; mkdir -p $$stage; \
-		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build $(GOFLAGS) \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=$$cgo $(GO) build $(GOFLAGS) \
 			-ldflags '$(LDFLAGS)' -o $$stage/voxen$$ext ./cmd/voxen; \
-		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build $(GOFLAGS) \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=$$cgo $(GO) build $(GOFLAGS) \
 			-ldflags '$(LDFLAGS)' -o $$stage/voxend$$ext ./cmd/voxend; \
-		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build $(GOFLAGS) \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=$$cgo $(GO) build $(GOFLAGS) \
 			-ldflags '$(LDFLAGS)' -o $$stage/voxen-signal$$ext ./cmd/voxen-signal; \
 		cp README.md LICENSE docs/security.md docs/protocol.md configs/config.example.yaml $$stage/ 2>/dev/null || true; \
-		(cd $(DIST_DIR) && tar -czf voxen-$(VERSION)-$$os-$$arch.tar.gz $$(basename $$stage)) ; \
+		(cd $(DIST_DIR) && tar -czf $$(basename $$stage).tar.gz $$(basename $$stage)) ; \
 		rm -rf $$stage; \
 	done
 	@echo "artifacts in $(DIST_DIR)/"
+	@echo "note: archives built without a native C toolchain are named -nocgo and have no audio"
 
 ## install: install into $GOBIN (or $(HOME)/go/bin)
 install:
@@ -124,13 +137,15 @@ license:
 	@$(GO) list -m -f '{{.Path}} {{.Version}}' all | tail -n +2 > $(DIST_DIR)/dependencies.txt
 	@echo "wrote $(DIST_DIR)/dependencies.txt"
 
-## deps: show host requirements for the current phase
+## deps: show host requirements
 deps:
-	@echo "Phase 1 requires only the Go toolchain."
-	@echo "Phase 2 will require:"
-	@echo "  Linux:   libopus-dev, PipeWire or PulseAudio (runtime), pkg-config, gcc"
-	@echo "  macOS:   Xcode command line tools, Opus (brew install opus)"
-	@echo "  Windows: MinGW-w64 toolchain for cgo, Opus static library"
+	@echo "Audio (miniaudio via cgo) requires a C toolchain:"
+	@echo "  Linux:   gcc, plus PipeWire or PulseAudio at runtime"
+	@echo "  macOS:   Xcode command line tools (CoreAudio is part of the OS)"
+	@echo "  Windows: MinGW-w64 or LLVM/clang for cgo"
+	@echo
+	@echo "Opus is pure Go (github.com/thesyncim/gopus): no libopus needed."
+	@echo "Building with CGO_ENABLED=0 still works; audio is then unavailable."
 
 ## check: what CI runs for a pull request
 check: lint vet test-race cross

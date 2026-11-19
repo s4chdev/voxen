@@ -215,7 +215,9 @@ func TestDaemonLifecycleThroughCLI(t *testing.T) {
 			Audio     bool `json:"audio"`
 			Media     bool `json:"media"`
 			Signaling bool `json:"signaling"`
+			Group     bool `json:"group_calls"`
 		} `json:"capabilities"`
+		AudioState string `json:"audio_state"`
 	}
 	if err := json.Unmarshal([]byte(status), &st); err != nil {
 		t.Fatalf("status json: %v\n%s", err, status)
@@ -226,13 +228,18 @@ func TestDaemonLifecycleThroughCLI(t *testing.T) {
 	if st.Fingerprint == "" {
 		t.Fatal("status has no fingerprint")
 	}
-	// Media is implemented and tested; audio capture is not. The daemon must
-	// report exactly that.
+	// Media and group calling are implemented. Audio depends on whether the
+	// backend initialised on this host, so assert consistency rather than a
+	// hardcoded value.
 	if !st.Capabilities.Media {
 		t.Fatal("media is implemented but not reported")
 	}
-	if st.Capabilities.Audio {
-		t.Fatal("audio capture is not implemented and must not be advertised")
+	if !st.Capabilities.Group {
+		t.Fatal("group calling is implemented but not reported")
+	}
+	hasBackend := !strings.Contains(strings.ToLower(st.AudioState), "unavailable")
+	if hasBackend != st.Capabilities.Audio {
+		t.Fatalf("audio capability %v contradicts audio state %q", st.Capabilities.Audio, st.AudioState)
 	}
 
 	// Mute round trip through the daemon.
@@ -348,7 +355,7 @@ func TestRoomCommandsReachTheDaemon(t *testing.T) {
 	}
 }
 
-func TestDoctorReportsPhaseGaps(t *testing.T) {
+func TestDoctorReportsRealSubsystems(t *testing.T) {
 	e := newEnv(t)
 	e.mustRun("init", "--name", "tester")
 	e.startForeground()
@@ -359,8 +366,15 @@ func TestDoctorReportsPhaseGaps(t *testing.T) {
 			t.Fatalf("doctor output missing %q:\n%s", want, out)
 		}
 	}
-	if !strings.Contains(out, "UNAVAILABLE") {
-		t.Fatalf("doctor must report unimplemented subsystems as unavailable:\n%s", out)
+	// Every check must carry a status; doctor must never emit a blank row.
+	for _, chk := range []string{"daemon", "config", "identity", "trust-store", "signaling", "audio", "clock"} {
+		if !strings.Contains(out, chk) {
+			t.Fatalf("doctor missing the %q check:\n%s", chk, out)
+		}
+	}
+	// Identity is always available, so doctor must never fail outright.
+	if strings.Contains(out, "one or more checks failed") {
+		t.Fatalf("doctor reported a failure on a healthy profile:\n%s", out)
 	}
 }
 
@@ -436,8 +450,13 @@ func TestTrustPinFlow(t *testing.T) {
 func TestVersionAndHelp(t *testing.T) {
 	e := newEnv(t)
 	version := e.mustRun("version")
-	if !strings.Contains(version, "phase:") || !strings.Contains(version, "p2p media") {
+	if !strings.Contains(version, "phase:") {
 		t.Fatalf("version output should name the phase:\n%s", version)
+	}
+	// The phase name changes as the project advances; assert the shape, not the
+	// specific milestone, so this test does not need editing every phase.
+	if !strings.Contains(version, "(") || !strings.Contains(version, ")") {
+		t.Fatalf("version should pair the phase number with its name:\n%s", version)
 	}
 	help := e.mustRun("--help")
 	for _, cmd := range []string{"init", "start", "stop", "restart", "create", "join", "leave"} {

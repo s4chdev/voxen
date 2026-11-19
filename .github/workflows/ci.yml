@@ -57,6 +57,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # A C toolchain is needed for two reasons: the race detector, and the
+      # miniaudio backend. On ubuntu-latest the ALSA headers are also required,
+      # because miniaudio compiles against them even when the PulseAudio backend
+      # is selected at runtime.
+      - name: install audio build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: unit tests
         shell: bash
         env:
@@ -67,6 +74,11 @@ jobs:
         env:
           CGO_ENABLED: "1"
         run: go test -race ./tests/security/...
+      - name: audio backend compiles
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: go build ./internal/audio/
 
   # Process-level integration tests: build the real binaries and drive them.
   integration:
@@ -82,8 +94,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: install audio build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
       - name: integration tests
         shell: bash
+        env:
+          CGO_ENABLED: "1"
         run: go test -v -timeout 15m ./tests/integration/...
 
   # Prove the whole tree compiles for six targets, including the Windows and
@@ -97,6 +114,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      # cgo-free on purpose: this job proves the pure-Go code and every build tag
+      # compile for all six targets. Audio is compiled and exercised in the test
+      # jobs, which enable cgo on each platform.
       - name: build all targets
         env:
           CGO_ENABLED: "0"

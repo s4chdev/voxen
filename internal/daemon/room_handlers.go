@@ -115,6 +115,7 @@ func (s *Server) roomCreate(ctx context.Context, params jsonRaw) (any, error) {
 	if err != nil {
 		return nil, roomError(err)
 	}
+	s.startAudio(c)
 	if p.MaxMembers > 0 {
 		// A per-call cap needs the controller to be configured before the room is
 		// created; rejecting is clearer than silently ignoring it.
@@ -136,6 +137,7 @@ func (s *Server) roomJoin(ctx context.Context, params jsonRaw) (any, error) {
 	if err != nil {
 		return nil, roomError(err)
 	}
+	s.startAudio(c)
 	return res, nil
 }
 
@@ -152,6 +154,9 @@ func (s *Server) roomLeave(params jsonRaw) (any, error) {
 	if c == nil {
 		return nil, ipc.NewError(ipc.CodeNotInRoom, "not in a room")
 	}
+	// Stop audio before tearing down sessions so capture never writes to a
+	// closing session.
+	s.stopAudio()
 	if err := c.LeaveRoom(p.Reason); err != nil {
 		return nil, roomError(err)
 	}

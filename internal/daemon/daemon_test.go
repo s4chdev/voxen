@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/s4chdev/voxen/internal/audio"
 	"github.com/s4chdev/voxen/internal/config"
 	"github.com/s4chdev/voxen/internal/daemon"
 	"github.com/s4chdev/voxen/internal/identity"
@@ -167,11 +168,19 @@ func TestDaemonReportsHonestCapabilities(t *testing.T) {
 	if !status.Capabilities.Signaling {
 		t.Fatal("signaling is implemented but not reported as available")
 	}
-	if status.Capabilities.Audio {
-		t.Fatal("audio capture is not implemented, so it must not be reported available")
+	// Audio availability must match whether the backend actually initialised on
+	// this host, not a hardcoded expectation.
+	probe, probeErr := audio.NewMiniAudio(nil)
+	backendOK := probeErr == nil
+	if probe != nil {
+		_ = probe.Close()
 	}
-	if status.Capabilities.Group {
-		t.Fatal("group calling is not implemented, so it must not be reported available")
+	if backendOK != status.Capabilities.Audio {
+		t.Fatalf("audio capability %v contradicts backend availability %v", status.Capabilities.Audio, backendOK)
+	}
+	// Group calling is implemented: the mesh tests connect three peers.
+	if !status.Capabilities.Group {
+		t.Fatal("group calling is implemented but not reported available")
 	}
 	if status.Fingerprint == "" {
 		t.Fatal("status must include the identity fingerprint")
@@ -292,11 +301,22 @@ func TestDaemonDevicesReportsUnavailable(t *testing.T) {
 	c := client()
 
 	res := call[ipc.DevicesResult](t, c, ipc.MethodDevicesList, nil)
-	if res.Error == "" {
-		t.Fatal("phase 1 has no audio backend; the daemon must say so")
+	if res.Error != "" {
+		// No backend on this host: reporting an explicit error is the honest
+		// behaviour, and nothing must be invented.
+		if len(res.Inputs) != 0 || len(res.Outputs) != 0 {
+			t.Fatalf("enumeration failed yet devices were reported: %+v", res)
+		}
+		return
 	}
-	if len(res.Inputs) != 0 {
-		t.Fatal("phase 1 must not invent devices")
+	// A backend exists, so enumeration must have produced real devices.
+	if len(res.Inputs)+len(res.Outputs) == 0 {
+		t.Fatal("backend available but no devices were enumerated")
+	}
+	for _, d := range append(res.Inputs, res.Outputs...) {
+		if d.ID == "" || d.Name == "" {
+			t.Fatalf("device with empty id or name: %+v", d)
+		}
 	}
 }
 
@@ -313,11 +333,16 @@ func TestDaemonDoctorDoesNotClaimPhantomFeatures(t *testing.T) {
 	for _, chk := range res.Checks {
 		statuses[chk.Name] = chk.Status
 	}
-	if statuses["audio"] != "unavailable" {
-		t.Fatalf("audio check = %q, want unavailable", statuses["audio"])
+	// The audio check must reflect the real backend: pass when it initialised,
+	// unavailable when it did not. Either is honest; claiming pass without a
+	// backend would not be.
+	if statuses["audio"] != "pass" && statuses["audio"] != "unavailable" {
+		t.Fatalf("audio check = %q, want pass or unavailable", statuses["audio"])
 	}
-	if statuses["signaling"] != "unavailable" {
-		t.Fatalf("signaling check = %q, want unavailable", statuses["signaling"])
+	// Signaling is implemented; with no server configured it must report the
+	// connection state honestly rather than claiming success.
+	if statuses["signaling"] != "pass" && statuses["signaling"] != "warn" {
+		t.Fatalf("signaling check = %q, want pass or warn", statuses["signaling"])
 	}
 	if statuses["identity"] != "pass" {
 		t.Fatalf("identity check = %q", statuses["identity"])

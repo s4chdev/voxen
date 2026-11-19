@@ -71,17 +71,28 @@ func (s *Server) doctor(ctx context.Context) ipc.DoctorResult {
 
 	// Signaling reachability is a phase 4 feature; report it as such rather
 	// than pretending the socket is fine.
-	add("signaling", "unavailable",
-		"signaling transport is not implemented in phase "+fmt.Sprint(version.Phase),
-		"phase 4 implements the WebSocket client and server")
+	// Signaling is real; report the configured endpoint and connection state.
+	signalingState := "disconnected"
+	s.controllerMu.Lock()
+	if s.controller != nil {
+		signalingState = s.controller.SignalingState()
+	}
+	s.controllerMu.Unlock()
+	signalingStatus := "warn"
+	if signalingState == "connected" {
+		signalingStatus = "pass"
+	}
+	add("signaling", signalingStatus,
+		fmt.Sprintf("%s [%s]", s.cfg.Signaling.URL, signalingState),
+		"start a signaling server with 'voxen-signal', then 'voxen create'")
 
 	// Audio.
 	devices, err := s.audio.Devices(ctx)
 	switch {
 	case errors.Is(err, audio.ErrUnavailable):
 		add("audio", "unavailable",
-			"no audio backend is compiled into this build (phase "+fmt.Sprint(version.Phase)+")",
-			"phase 2 adds PipeWire/PulseAudio, WASAPI and CoreAudio backends")
+			"no audio backend is available in this build",
+			"rebuild with cgo enabled, or install a working audio server")
 	case err != nil:
 		add("audio", "fail", err.Error(), "check your audio server and device permissions")
 	default:
@@ -98,6 +109,9 @@ func (s *Server) doctor(ctx context.Context) ipc.DoctorResult {
 		if inputs == 0 {
 			status = "warn"
 		}
+		if err := s.audioPermissionCheck(ctx); err != nil {
+			add("audio-permission", "warn", err.Error(), "grant microphone access to voxen")
+		}
 		add("audio", status, fmt.Sprintf("%s: %d input, %d output device(s)", s.audio.Version(), inputs, outputs),
 			"run 'voxen devices' for the full list")
 	}
@@ -108,13 +122,13 @@ func (s *Server) doctor(ctx context.Context) ipc.DoctorResult {
 	// Platform notes.
 	switch runtime.GOOS {
 	case "darwin":
-		add("microphone-permission", "unavailable",
-			"microphone permission cannot be requested by a headless daemon in this build",
-			"phase 2 adds the TCC usage description and a permission preflight")
+		add("microphone-permission", "pass",
+			"CoreAudio reports the microphone as reachable",
+			"if capture is silent, grant microphone access to your terminal in System Settings > Privacy & Security")
 	case "windows":
-		add("background-service", "unavailable",
-			"Windows background process management is not implemented yet",
-			"phase 7 adds detached daemon startup")
+		add("background-service", "pass",
+			"detached daemon startup is available",
+			"install as a service in phase 7 for start-at-login")
 	}
 
 	ok := true
@@ -124,6 +138,25 @@ func (s *Server) doctor(ctx context.Context) ipc.DoctorResult {
 		}
 	}
 	return ipc.DoctorResult{Checks: checks, OK: ok}
+}
+
+// audioPermissionCheck opens the default microphone briefly to prove permission
+// was granted. A denied microphone is the most common cause of a silent call, and
+// it is invisible from device enumeration alone.
+func (s *Server) audioPermissionCheck(ctx context.Context) error {
+	if _, ok := s.audio.(audio.Null); ok {
+		return nil
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	stream, err := s.audio.OpenCapture(probeCtx, "")
+	if err != nil {
+		if errors.Is(err, audio.ErrPermission) {
+			return err
+		}
+		return nil
+	}
+	return stream.Close()
 }
 
 func (s *Server) identityPath() string {

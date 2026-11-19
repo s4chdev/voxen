@@ -102,6 +102,9 @@ type WebRTCSession struct {
 	negotiated *Negotiation // remote negotiation, for reference and tests
 	sendMu     sync.Mutex
 	recvCh     chan []int16
+	// done is closed on teardown. recvCh is deliberately never closed: a sender
+	// racing Close would otherwise panic on send-to-closed-channel.
+	done chan struct{}
 
 	// statsMu serialises Stats against Close. Pion's GetStats reads connection
 	// state that Close mutates, so calling them concurrently is a data race.
@@ -239,6 +242,7 @@ func NewWebRTCSession(ctx context.Context, cfg SessionConfig) (*WebRTCSession, e
 		track:     track,
 		recvCh:    make(chan []int16, 32),
 		authCh:    make(chan struct{}),
+		done:      make(chan struct{}),
 	}
 
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
@@ -806,12 +810,16 @@ func (s *WebRTCSession) ReceivePCM(ctx context.Context, pcm []int16) (int, error
 	select {
 	case <-ctx.Done():
 		return 0, ctx.Err()
-	case frame, ok := <-s.recvCh:
-		if !ok {
+	case <-s.done:
+		// Drain anything already buffered before reporting the close.
+		select {
+		case frame := <-s.recvCh:
+			return copy(pcm, frame), nil
+		default:
 			return 0, ErrClosed
 		}
-		n := copy(pcm, frame)
-		return n, nil
+	case frame := <-s.recvCh:
+		return copy(pcm, frame), nil
 	}
 }
 
@@ -854,8 +862,20 @@ func (s *WebRTCSession) readRTPLoop(track *webrtc.TrackRemote) {
 		if !s.isAuthenticated() {
 			continue
 		}
+		// Deliver under the read lock so Close cannot close the channel between
+		// the check and the send, which would panic. Select on done as well, so a
+		// close unblocks a waiting sender instead of relying on the timeout.
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return
+		}
+		ch := s.recvCh
+		s.mu.Unlock()
 		select {
-		case s.recvCh <- pcm[:n]:
+		case ch <- pcm[:n]:
+		case <-s.done:
+			return
 		case <-time.After(100 * time.Millisecond):
 			// Nobody is consuming audio; drop rather than block the reader and
 			// stall the RTP stream.
@@ -915,17 +935,43 @@ func (s *WebRTCSession) Stats() SessionStats {
 	if sctp == nil || sctp.Transport() == nil {
 		return out
 	}
-	ice := sctp.Transport().ICETransport()
-	if ice == nil {
-		return out
-	}
-	if pair, err := ice.GetSelectedCandidatePair(); err == nil && pair != nil {
-		out.LocalCandidate = describeCandidate(pair.Local)
-		out.RemoteCandidate = describeCandidate(pair.Remote)
-		// voxen never configures TURN, so a relayed candidate would be a bug.
-		out.Relayed = candidateIsRelay(pair.Local) || candidateIsRelay(pair.Remote)
-	}
+
+	// The selected candidate pair is read from GetStats rather than from
+	// ICETransport.GetSelectedCandidatePair.
+	//
+	// The direct getter races Pion's StartContext, which writes the gatherer while
+	// the getter reads it. GetStats collects everything under Pion's own locks, so
+	// it is safe to call concurrently with negotiation and with Close.
 	report := s.pc.GetStats()
+
+	// Two passes: first collect candidate details, then resolve the nominated
+	// pair's candidate IDs.
+	candidates := map[string]webrtc.ICECandidateStats{}
+	var selected *webrtc.ICECandidatePairStats
+	for _, stat := range report {
+		switch v := stat.(type) {
+		case webrtc.ICECandidateStats:
+			candidates[v.ID] = v
+		case webrtc.ICECandidatePairStats:
+			if v.Nominated && v.State == webrtc.StatsICECandidatePairStateSucceeded {
+				pair := v
+				selected = &pair
+			}
+		}
+	}
+	if selected != nil {
+		local, hasLocal := candidates[selected.LocalCandidateID]
+		remote, hasRemote := candidates[selected.RemoteCandidateID]
+		if hasLocal {
+			out.LocalCandidate = candidateSummary(local)
+			out.Relayed = out.Relayed || local.CandidateType == webrtc.ICECandidateTypeRelay || local.URL != ""
+		}
+		if hasRemote {
+			out.RemoteCandidate = candidateSummary(remote)
+			out.Relayed = out.Relayed || remote.CandidateType == webrtc.ICECandidateTypeRelay || remote.URL != ""
+		}
+	}
+
 	for _, stat := range report {
 		switch v := stat.(type) {
 		case webrtc.ICECandidatePairStats:
@@ -955,18 +1001,9 @@ func (s *WebRTCSession) Stats() SessionStats {
 	return out
 }
 
-func describeCandidate(c *webrtc.ICECandidate) string {
-	if c == nil {
-		return ""
-	}
-	return fmt.Sprintf("%s/%s/%s", c.Typ, c.Protocol, c.Address)
-}
-
-func candidateIsRelay(c *webrtc.ICECandidate) bool {
-	if c == nil {
-		return false
-	}
-	return c.Typ == webrtc.ICECandidateTypeRelay
+// candidateSummary renders one candidate for diagnostics.
+func candidateSummary(c webrtc.ICECandidateStats) string {
+	return fmt.Sprintf("%s/%s/%s:%d", c.CandidateType, c.Protocol, c.IP, c.Port)
 }
 
 // Close tears the session down. Safe to call more than once.
@@ -980,7 +1017,7 @@ func (s *WebRTCSession) Close() error {
 		s.statsMu.Lock()
 		err = s.pc.Close()
 		s.statsMu.Unlock()
-		close(s.recvCh)
+		close(s.done)
 	})
 	return err
 }

@@ -54,6 +54,9 @@ type Server struct {
 	// signaling connection.
 	controller   *Controller
 	controllerMu sync.Mutex
+	// bridge pumps audio between the devices and the mesh. It lives as long as
+	// the stay in a room.
+	bridge *AudioBridge
 
 	listener net.Listener
 	started  time.Time
@@ -107,7 +110,7 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 		cfg:      cfg,
 		identity: id,
 		trust:    trust,
-		audio:    audio.Null{},
+		audio:    audioEngineFromEnv(opts.Logger),
 		replay:   security.NewReplayGuard(security.DefaultReplayCapacity),
 		started:  time.Now().UTC(),
 		shutdown: make(chan struct{}),
@@ -208,6 +211,12 @@ func (s *Server) closeOnce() {
 }
 
 func (s *Server) cleanup() {
+	s.controllerMu.Lock()
+	if s.bridge != nil {
+		s.bridge.Stop()
+		s.bridge = nil
+	}
+	s.controllerMu.Unlock()
 	_ = s.audio.Close()
 	s.controllerMu.Lock()
 	if s.controller != nil {
@@ -394,7 +403,8 @@ func (s *Server) status() ipc.StatusResult {
 		Muted:          s.muted.Load(),
 		Room:           s.roomState(),
 		Peers:          peers,
-		AudioState:     audioState(s.audio),
+		AudioState:     s.audioState(),
+		Audio:          s.audioStats(),
 		Capabilities:   s.capabilities(),
 	}
 }
@@ -403,13 +413,18 @@ func (s *Server) status() ipc.StatusResult {
 // real; audio capture and group calling are not yet, and saying so is the whole
 // point of this method.
 func (s *Server) capabilities() ipc.Capabilities {
+	// Audio is available only if the backend actually initialised. Reporting it
+	// unconditionally would send a user to debug a "working" feature that silently
+	// produced no sound.
+	audioOK := false
+	if _, ok := s.audio.(audio.Null); !ok {
+		audioOK = s.audio != nil
+	}
 	return ipc.Capabilities{
 		Signaling: true,
 		Media:     true,
-		// Audio requires the platform backends from phase 2.
-		Audio: false,
-		// Group mesh wiring lands with the room orchestration.
-		Group: false,
+		Audio:     audioOK,
+		Group:     true,
 	}
 }
 
@@ -623,19 +638,15 @@ func (s *Server) setMute(params jsonRaw) (any, error) {
 		next = !s.muted.Load()
 	}
 	s.muted.Store(next)
+	s.controllerMu.Lock()
+	bridge := s.bridge
+	s.controllerMu.Unlock()
+	if bridge != nil {
+		bridge.SetMuted(next)
+	}
 	active := len(s.peerSnapshot()) > 0
 	s.log.Info("microphone state changed", "muted", next)
 	return ipc.MuteResult{Muted: next, Active: active}, nil
-}
-
-func audioState(engine audio.Engine) string {
-	if engine == nil {
-		return "unavailable"
-	}
-	if _, ok := engine.(audio.Null); ok {
-		return "unavailable"
-	}
-	return engine.Version()
 }
 
 // Stop requests a graceful shutdown. Used by tests.

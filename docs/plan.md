@@ -244,3 +244,48 @@ The daemon now drives the media mesh that phase 3 built. `voxen create`, `join`,
 
 Phase 2 (real audio) is next. Explicit admission/removal and speaking indicators
 belong with phase 6. Service supervision is phase 7.
+
+---
+
+## Progress update: real audio (phase 2)
+
+Microphone and speaker audio are implemented and working on Linux.
+
+### Delivered
+
+| Item | Evidence |
+|---|---|
+| miniaudio backend (PipeWire/Pulse, WASAPI, CoreAudio) | `internal/audio/miniaudio.go` |
+| Device enumeration with defaults | `voxen devices`, `TestDevicesEnumeration` |
+| Live capture, 48 kHz mono normalisation | `TestCaptureProducesFramesFromRealDevice` |
+| Live playback with channel expansion | `TestPlaybackAcceptsFrames` |
+| cgo-free builds still work, reporting audio unavailable | `internal/audio/backend_nocgo.go` |
+| Capture fanned out to every peer, peers mixed to speaker | `internal/daemon/audio_bridge.go` |
+| Mute sends silence so the timeline survives | `TestAudioBridgeMuteSendsSilence` |
+| Clipping protection on the mix | `TestAudioBridgeClampPreventsClipping` |
+| End-to-end call with real devices | `TestRealCallCarriesAudio` |
+
+### Bugs found and fixed
+
+1. **Double free on device teardown.** Both the stream and the engine called
+   `ma_device_uninit`. Streams now own their device lifetime exclusively; the
+   engine owns only the context.
+2. **Playback loop read a field `Stop` clears.** The loops now receive their
+   streams as parameters instead of re-reading mutable fields.
+3. **Pion race on Stats.** `ICETransport.GetSelectedCandidatePair` reads the
+   gatherer that `StartContext` writes. Candidate selection is now read from
+   `GetStats`, which is internally synchronised, and that also lets relayed
+   candidates be detected by URL.
+4. **Send on a closed channel.** `Close` closed the receive channel while the RTP
+   reader could be sending on it. The channel is now never closed; a separate
+   `done` channel signals teardown.
+
+### Not verified
+
+Windows (WASAPI) and macOS (CoreAudio) audio compile in CI but have not been run
+on real hardware. The backend is the same library with the same code path, which
+is good evidence but not proof. Verify with `voxen devices` and a loopback call
+on each platform before claiming support.
+
+Echo cancellation and noise suppression are still unimplemented; the config keys
+exist and `voxen doctor` will report them as unavailable rather than pretending.

@@ -22,11 +22,11 @@ var (
 // Phase is the implementation phase currently shipped by this build. Anything
 // the binary cannot actually do is reported as unavailable rather than faked.
 const (
-	// Phase 3 is the current milestone: two-peer encrypted media is implemented
-	// and tested. Some phase-2 (microphone/speaker) and phase-6 (group call)
-	// work is still outstanding; see docs/plan.md for the exact gaps.
-	Phase     = 3
-	PhaseName = "p2p media"
+	// Phase 2 + 3 + 4 are delivered: real microphone and speaker audio over
+	// authenticated two-peer and mesh sessions. Remaining work is supervision and
+	// packaging; see docs/plan.md.
+	Phase     = 4
+	PhaseName = "group calls"
 )
 
 // String renders a single-line human readable version string.

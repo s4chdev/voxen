@@ -10,17 +10,18 @@ voxen verify C6971DF6ABDD7317B89178DEFBB2BF88E21A24699C7E27F48EB1090B51E8C1D9
 voxen create
 ```
 
-> **Build status: two-peer encrypted media works.**
+> **Build status: calls carry real microphone audio.**
 > Identity, the daemon, the CLI, the security state machines, a self-hosted
 > signaling server, and **real WebRTC sessions with the Ed25519-to-DTLS binding
 > enforced at runtime** are implemented and tested. A two-peer call carries Opus
 > audio over a direct, authenticated SRTP path, and hostile-relay attacks are
 > rejected by tests.
 >
-> **Not yet implemented: microphone and speaker capture.** Audio currently comes
-> from a generated tone, so voxen cannot yet carry a human voice. That is phase 2.
-> `voxen status` and `voxen doctor` report all of this, and unimplemented commands
-> exit with code `4` instead of pretending.
+> Microphone capture and speaker playback work through miniaudio (PipeWire /
+> PulseAudio on Linux, WASAPI on Windows, CoreAudio on macOS). `voxen status`
+> reports live frame counters, so "is sound actually moving?" has a factual
+> answer. Linux is verified end to end here; the Windows and macOS audio paths
+> compile in CI but have not been run on real hardware yet, and the docs say so.
 
 ---
 
@@ -48,6 +49,9 @@ voxen create
   maintains a full mesh: every participant has an independently authenticated
   session with every other one. A verified three-peer mesh is covered by a test
   that drives the real binaries.
+- **Real audio** — 48 kHz mono Opus over the authenticated session, with capture
+  fanned out to every peer and peer audio mixed into the speaker. Mute keeps the
+  RTP timeline alive by sending silence rather than stopping transmission.
 - Tests: unit, IPC, daemon, CLI, process-level integration, security acceptance,
   and live two-peer negotiation, all clean under `-race`.
 
@@ -55,20 +59,23 @@ voxen create
 
 | Feature | Phase |
 |---|---|
-| Microphone/speaker capture (audio is a generated tone) | 2 |
 | Speaking indicators, per-peer mute | 6 |
 | Explicit admission and removal (`admit` / `remove`) | 6 |
 | systemd / launchd units, Windows service | 7 |
+| Echo cancellation and noise suppression | 8 |
+| Windows/macOS audio verified on real hardware | needs a run on those hosts |
 
 ---
 
 ## Requirements
 
 - Go 1.25 or newer (the repo builds with 1.27).
-- That is the entire requirement for phase 1: no cgo, no audio libraries, no
-  external services.
-- Phase 2 will add Opus and audio backends; `make deps` prints the list when it
-  lands.
+- A C toolchain, because the audio backend is cgo: `gcc` on Linux (plus
+  `libasound2-dev`), the Xcode command line tools on macOS, and MinGW-w64 or
+  LLVM/clang on Windows.
+- Opus is pure Go, so no `libopus` install is needed.
+- Building with `CGO_ENABLED=0` still works; audio is then reported as
+  unavailable instead of silently producing no sound.
 
 ## Build
 

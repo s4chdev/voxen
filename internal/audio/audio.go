@@ -29,6 +29,11 @@ var DefaultFormat = Format{SampleRate: 48000, Channels: 1}
 // FramesPerPacket is 20 ms at 48 kHz.
 const FramesPerPacket = 960
 
+// DefaultFrameDurationMS is the frame duration the media profile uses. It is
+// repeated here because the audio backends need it without importing media,
+// which would invert the dependency direction.
+const DefaultFrameDurationMS = 20
+
 // DeviceID is a stable, backend-specific identifier. Names are for humans;
 // IDs survive device reordering.
 type DeviceID string
@@ -51,6 +56,8 @@ var (
 	ErrPermission      = errors.New("audio: permission denied (grant microphone access)")
 	ErrDisconnected    = errors.New("audio: device disconnected")
 	ErrUnsupportedRate = errors.New("audio: unsupported sample rate")
+	// ErrStreamGone is returned when a stream was closed underneath its user.
+	ErrStreamGone = errors.New("audio: stream is closed")
 )
 
 // Enumerator lists and watches audio devices.

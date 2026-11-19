@@ -74,6 +74,17 @@ func printStatus(a *App, s ipc.StatusResult) {
 	}
 	t.add("microphone", "muted"+" ("+muted+")")
 	t.add("audio", s.AudioState)
+	// Live call counters: the honest answer to "is sound actually moving?".
+	if s.Audio.Running {
+		mic := "live"
+		if s.Audio.Muted {
+			mic = "muted"
+		}
+		t.add("call audio", fmt.Sprintf("%s, sent %d frames, received %d", mic, s.Audio.FramesSent, s.Audio.FramesReceived))
+		if s.Audio.InputDropped > 0 || s.Audio.OutputXRuns > 0 {
+			t.add("audio health", fmt.Sprintf("input dropped %d, output xruns %d", s.Audio.InputDropped, s.Audio.OutputXRuns))
+		}
+	}
 	// Capability matrix: never leave the user guessing what this build can do.
 	caps := []string{}
 	if s.Capabilities.Signaling {
@@ -106,7 +117,7 @@ func phaseName(p int) string {
 	case 3:
 		return "p2p media"
 	case 4:
-		return "signaling"
+		return "group calls"
 	case 5:
 		return "security hardening"
 	case 6:
@@ -224,12 +235,17 @@ func (a *App) newDevicesCommand() *cobra.Command {
 					if d.IsDefault {
 						marker = "*"
 					}
-					fmt.Fprintf(a.stdout, " %s %-36s %s\n", marker, d.ID, d.Name)
+					// The device name is its identifier in this backend, so print
+					// it once. "voxen config" records the name to select it.
+					fmt.Fprintf(a.stdout, " %s %s\n", marker, d.Name)
 				}
 			}
 			printDevices("Input devices", res.Inputs)
 			fmt.Fprintln(a.stdout)
 			printDevices("Output devices", res.Outputs)
+			fmt.Fprintln(a.stdout)
+			fmt.Fprintln(a.stdout, "Asterisk marks the system default. To pin a device, set")
+			fmt.Fprintln(a.stdout, "audio.input_device / audio.output_device in the config.")
 			return nil
 		},
 	}

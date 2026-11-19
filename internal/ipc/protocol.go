@@ -186,24 +186,37 @@ type RoomEvent struct {
 
 // StatusResult is the aggregate daemon status.
 type StatusResult struct {
-	PID            int       `json:"pid"`
-	Version        string    `json:"version"`
-	Phase          int       `json:"phase"`
-	Platform       string    `json:"platform"`
-	StartedAt      string    `json:"started_at"`
-	ConfigPath     string    `json:"config_path"`
-	SocketPath     string    `json:"socket"`
-	Fingerprint    string    `json:"fingerprint"`
-	DisplayName    string    `json:"display_name,omitempty"`
-	Signaling      string    `json:"signaling"`
-	SignalingState string    `json:"signaling_state"`
-	Muted          bool      `json:"muted"`
-	Room           RoomState `json:"room"`
-	Peers          int       `json:"peers"`
-	AudioState     string    `json:"audio_state"`
+	PID            int         `json:"pid"`
+	Version        string      `json:"version"`
+	Phase          int         `json:"phase"`
+	Platform       string      `json:"platform"`
+	StartedAt      string      `json:"started_at"`
+	ConfigPath     string      `json:"config_path"`
+	SocketPath     string      `json:"socket"`
+	Fingerprint    string      `json:"fingerprint"`
+	DisplayName    string      `json:"display_name,omitempty"`
+	Signaling      string      `json:"signaling"`
+	SignalingState string      `json:"signaling_state"`
+	Muted          bool        `json:"muted"`
+	Room           RoomState   `json:"room"`
+	Peers          int         `json:"peers"`
+	AudioState     string      `json:"audio_state"`
+	Audio          AudioStatus `json:"audio"`
 	// Capabilities reports which subsystems this build actually implements, so
 	// clients never have to guess whether a feature is usable.
 	Capabilities Capabilities `json:"capabilities"`
+}
+
+// AudioStatus reports live audio counters.
+type AudioStatus struct {
+	Running        bool   `json:"running"`
+	Muted          bool   `json:"muted"`
+	FramesSent     uint64 `json:"frames_sent"`
+	FramesReceived uint64 `json:"frames_received"`
+	InputDropped   uint64 `json:"input_dropped"`
+	OutputXRuns    uint64 `json:"output_xruns"`
+	InputDevice    string `json:"input_device,omitempty"`
+	OutputDevice   string `json:"output_device,omitempty"`
 }
 
 // Capabilities is the honest feature matrix of the running build.

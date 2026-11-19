@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	github.com/Microsoft/go-winio v0.6.4
+	github.com/gen2brain/malgo v0.11.28
 	github.com/gorilla/websocket v1.5.3
 	github.com/pion/webrtc/v4 v4.2.27
 	github.com/spf13/cobra v1.10.2

@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -48,6 +49,25 @@ func buildBinaries(t *testing.T) (voxen, voxend string) {
 }
 
 // env is an isolated voxen profile plus the built binaries.
+// syncBuffer is a concurrency-safe bytes.Buffer for capturing a child process's
+// output while the test may read it concurrently.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type env struct {
 	t      *testing.T
 	dir    string
@@ -109,8 +129,10 @@ func (e *env) startForeground() *exec.Cmd {
 	e.t.Helper()
 	cmd := exec.Command(e.voxend, "--foreground", "--config", e.configPath())
 	cmd.Env = e.cmdEnv()
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	// A locked writer: the child's stderr is copied on an exec goroutine, so
+	// reading the buffer without synchronisation is a data race.
+	stderr := &syncBuffer{}
+	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
 		e.t.Fatalf("start voxend: %v", err)
 	}
@@ -204,8 +226,13 @@ func TestDaemonLifecycleThroughCLI(t *testing.T) {
 	if st.Fingerprint == "" {
 		t.Fatal("status has no fingerprint")
 	}
-	if st.Capabilities.Audio || st.Capabilities.Media {
-		t.Fatal("phase 1 build must not advertise audio or media")
+	// Media is implemented and tested; audio capture is not. The daemon must
+	// report exactly that.
+	if !st.Capabilities.Media {
+		t.Fatal("media is implemented but not reported")
+	}
+	if st.Capabilities.Audio {
+		t.Fatal("audio capture is not implemented and must not be advertised")
 	}
 
 	// Mute round trip through the daemon.
@@ -406,7 +433,7 @@ func TestTrustPinFlow(t *testing.T) {
 func TestVersionAndHelp(t *testing.T) {
 	e := newEnv(t)
 	version := e.mustRun("version")
-	if !strings.Contains(version, "phase:") || !strings.Contains(version, "1 (foundation)") {
+	if !strings.Contains(version, "phase:") || !strings.Contains(version, "p2p media") {
 		t.Fatalf("version output should name the phase:\n%s", version)
 	}
 	help := e.mustRun("--help")

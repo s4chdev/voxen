@@ -156,3 +156,47 @@ call surviving; bandwidth measurement at 5 participants.
 A phase is complete only when: it compiles for all six targets, `go test -race`
 passes, the integration suite passes, the documentation and ADRs reflect reality,
 and `voxen status`/`voxen doctor` tell the truth about it.
+
+---
+
+## Progress update: phase 3 and 4 vertical slice
+
+The foundation-first order was changed after phase 1, deliberately. The security
+claim is the differentiator and it can be tested headlessly, so it was built
+before the audio backends, which can only be verified on their own platforms.
+
+### Delivered
+
+| Item | Phase | Evidence |
+|---|---|---|
+| Opus encode/decode, fixed profile | 2 (partial) | `internal/media/codec.go`, round-trip test |
+| Pion peer connections | 3 | `internal/media/webrtc_session.go` |
+| Signed statement → live DTLS binding | 3 | `TestTwoPeerAuthenticatedSession` |
+| Refusal to move media before auth | 3 | `TestAudioRefusedBeforeAuthentication` |
+| ICE candidate buffering for trickle | 3 | `internal/media` candidate tests |
+| Direct-path verification (`Relayed` false) | 3 | `TestStatsShowDirectPath` |
+| Self-hosted signaling server | 4 | `server/signaling`, `cmd/voxen-signal` |
+| Signaling client with relay | 4 | `internal/signaling/client.go` |
+| Cross-room injection rejected | 4 | `TestSignalingRelayRejectsCrossRoomInjection` |
+| Server cannot spoof `from` | 4 | `TestServerAssignsFromAndIgnoresSpoof` |
+| End-to-end: server → two sessions → audio | 3+4 | `TestSignalingRelayAndDirectMedia` |
+
+### Bugs this work exposed (all fixed, all regression-tested)
+
+1. **Trickle ICE candidates were dropped.** Relaying only the candidate string
+   loses `sdpMid`/`sdpMLineIndex`, so Pion cannot attach it to a media section.
+   Candidates are now carried with their media identifiers.
+2. **Candidates arriving before a remote description were lost.** They are now
+   buffered (bounded) and flushed once negotiation applies the remote SDP.
+3. **`Authenticate` self-deadlocked.** It waited on a channel only it closes.
+4. **A tampering attempt could poison the session.** The replay guard committed
+   the nonce before the SDP fingerprint was checked, so a rejected tampered offer
+   made the genuine retry look like a replay. Fixed by ordering the checks;
+   `TestRejectedTamperDoesNotBurnNonce` pins it.
+5. **Server self-deadlock** in `createRoom` (locking `s.mu` twice).
+
+### Remaining
+
+Phase 2 (real audio), phase 6 (mesh + room CLI), phase 7 (service supervision),
+phase 8 (multi-host interop). The audio interfaces are unchanged, so phase 2 slots
+in behind `audio.Engine` without touching the security code.

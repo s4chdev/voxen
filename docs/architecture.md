@@ -74,6 +74,11 @@ Roster updates are monotonic; a rolled-back roster is rejected.
 
 ## Media plane
 
+The media plane is implemented in `internal/media`. A session cannot transmit or
+receive audio until it has completed the four-step authentication below; this is
+enforced in code, not by convention (`SendPCM` and `ReceivePCM` both return
+`ErrUnauthenticated` before the binding commits).
+
 Each peer connection is negotiated independently:
 
 1. The initiator creates an offer after attaching an Opus track.
@@ -119,9 +124,9 @@ identity format and media profile.
 | Phase | Scope | State in this build |
 |---|---|---|
 | 1 | foundation: modules, interfaces, config, logging, CLI, daemon, IPC, identity, security primitives | **complete** |
-| 2 | audio backends, Opus pipeline, device hotplug | planned |
-| 3 | Pion peer connections, two-peer encrypted audio, DTLS binding at runtime | planned |
-| 4 | WebSocket signaling client and self-hosted server, rooms, STUN | planned |
+| 2 | audio backends, device hotplug | **partially** — Opus pipeline done; PipeWire/WASAPI/CoreAudio capture pending |
+| 3 | Pion peer connections, two-peer encrypted audio, DTLS binding at runtime | **complete and tested** |
+| 4 | WebSocket signaling client and self-hosted server, rooms, STUN | **complete and tested** |
 | 5 | full security test matrix, verifier tooling, rotation procedures | planned |
 | 6 | mesh group calls, speaking indicators, per-peer mute | planned |
 | 7 | daemon supervision (systemd/launchd/Windows), reconnection, TUI hooks | planned |

@@ -158,11 +158,20 @@ func TestDaemonReportsHonestCapabilities(t *testing.T) {
 	c := client()
 
 	status := call[ipc.StatusResult](t, c, ipc.MethodStatus, nil)
-	if status.Phase != 1 {
-		t.Fatalf("phase = %d, want 1", status.Phase)
+	// The capability matrix must match the code. Media and signaling are now
+	// implemented and tested; audio capture and group calls are not, and the
+	// daemon must not claim them.
+	if !status.Capabilities.Media {
+		t.Fatal("media is implemented but not reported as available")
 	}
-	if status.Capabilities.Audio || status.Capabilities.Media || status.Capabilities.Signaling {
-		t.Fatalf("phase 1 must not claim media capabilities: %+v", status.Capabilities)
+	if !status.Capabilities.Signaling {
+		t.Fatal("signaling is implemented but not reported as available")
+	}
+	if status.Capabilities.Audio {
+		t.Fatal("audio capture is not implemented, so it must not be reported available")
+	}
+	if status.Capabilities.Group {
+		t.Fatal("group calling is not implemented, so it must not be reported available")
 	}
 	if status.Fingerprint == "" {
 		t.Fatal("status must include the identity fingerprint")

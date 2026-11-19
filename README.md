@@ -10,13 +10,18 @@ voxen verify C6971DF6ABDD7317B89178DEFBB2BF88E21A24699C7E27F48EB1090B51E8C1D9
 voxen create
 ```
 
-> **Build status: phase 1 (foundation).**
-> Identity, configuration, the daemon, the private IPC layer, the CLI, the room
-> and security state machines are implemented and tested. **Audio, WebRTC media
-> and the signaling transport are not implemented yet**, so voxen does not
-> carry calls in this build. `voxen status` and `voxen doctor` say so explicitly,
-> and every unimplemented command exits with code `4` instead of pretending.
-> See [docs/plan.md](docs/plan.md) for what each phase delivers.
+> **Build status: two-peer encrypted media works.**
+> Identity, the daemon, the CLI, the security state machines, a self-hosted
+> signaling server, and **real WebRTC sessions with the Ed25519-to-DTLS binding
+> enforced at runtime** are implemented and tested. A two-peer call carries Opus
+> audio over a direct, authenticated SRTP path, and hostile-relay attacks are
+> rejected by tests.
+>
+> **Not yet implemented: microphone and speaker capture.** Audio currently comes
+> from a generated tone, so voxen cannot yet carry a human voice. That is phase 2.
+> Group calls and the room CLI commands are also still pending.
+> `voxen status` and `voxen doctor` report all of this, and unimplemented commands
+> exit with code `4` instead of pretending.
 
 ---
 
@@ -35,18 +40,21 @@ voxen create
 - Security primitives: signed session statements with DTLS-fingerprint binding,
   deterministic canonical encodings, replay protection, administrator-signed
   room rosters with rollback rejection.
+- **`voxen-signal`** — a self-hosted WebSocket signaling server (single binary,
+  no database, never sees audio).
+- **Two-peer encrypted media** — Pion WebRTC, Opus 48 kHz mono, direct SRTP, with
+  the peer's Ed25519 identity bound to the DTLS certificate actually negotiated.
+  Media is refused until that binding succeeds.
 - Tests: unit, IPC, daemon, CLI, process-level integration, security acceptance,
-  all clean under `-race`.
+  and live two-peer negotiation, all clean under `-race`.
 
 ## What does not work yet
 
 | Feature | Phase |
 |---|---|
-| Microphone/speaker capture, Opus | 2 |
-| WebRTC peer connections, live DTLS binding | 3 |
-| Signaling client and self-hosted server | 4 |
+| Microphone/speaker capture (audio is a generated tone) | 2 |
 | Group (mesh) calls | 6 |
-| `create` / `join` / `leave` | 4 |
+| `create` / `join` / `leave` CLI wiring | 6 |
 | systemd / launchd units, Windows service | 7 |
 
 ---

@@ -23,13 +23,13 @@ LDFLAGS := -s -w \
 GOFLAGS := -trimpath
 GO ?= go
 
-.PHONY: all build voxen voxend test test-short test-race test-integration test-security \
+.PHONY: all build voxen voxend voxen-signal test test-short test-race test-integration test-security \
 	lint vet fmt tidy cross clean install uninstall dist deps license check ci help
 
 all: check build
 
-## build: compile both binaries into bin/
-build: voxen voxend
+## build: compile the CLI, daemon and signaling server into bin/
+build: voxen voxend voxen-signal
 
 voxen:
 	@mkdir -p $(BIN_DIR)
@@ -38,6 +38,10 @@ voxen:
 voxend:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/voxend ./cmd/voxend
+
+voxen-signal:
+	@mkdir -p $(BIN_DIR)
+	$(GO) build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/voxen-signal ./cmd/voxen-signal
 
 ## test: run the whole test suite
 test:
@@ -97,6 +101,8 @@ dist: cross
 			-ldflags '$(LDFLAGS)' -o $$stage/voxen$$ext ./cmd/voxen; \
 		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build $(GOFLAGS) \
 			-ldflags '$(LDFLAGS)' -o $$stage/voxend$$ext ./cmd/voxend; \
+		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build $(GOFLAGS) \
+			-ldflags '$(LDFLAGS)' -o $$stage/voxen-signal$$ext ./cmd/voxen-signal; \
 		cp README.md LICENSE docs/security.md docs/protocol.md configs/config.example.yaml $$stage/ 2>/dev/null || true; \
 		(cd $(DIST_DIR) && tar -czf voxen-$(VERSION)-$$os-$$arch.tar.gz $$(basename $$stage)) ; \
 		rm -rf $$stage; \
@@ -105,11 +111,11 @@ dist: cross
 
 ## install: install into $GOBIN (or $(HOME)/go/bin)
 install:
-	$(GO) install -ldflags '$(LDFLAGS)' ./cmd/voxen ./cmd/voxend
+	$(GO) install -ldflags '$(LDFLAGS)' ./cmd/voxen ./cmd/voxend ./cmd/voxen-signal
 
 ## uninstall: remove installed binaries
 uninstall:
-	@rm -f $(shell $(GO) env GOPATH)/bin/voxen $(shell $(GO) env GOPATH)/bin/voxend
+	@rm -f $(shell $(GO) env GOPATH)/bin/voxen $(shell $(GO) env GOPATH)/bin/voxend $(shell $(GO) env GOPATH)/bin/voxen-signal
 
 ## license: list dependency licenses for audit
 license:

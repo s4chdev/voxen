@@ -5,10 +5,27 @@ actually been implemented and tested in the current build. It is normative: if a
 claim here is not backed by code and a test, the claim is wrong and must be
 removed.
 
-**Current build: phase 1.** Identity, signed statements, DTLS binding logic,
-replay protection and roster authentication are implemented and unit-tested.
-Audio transport and the runtime DTLS binding are **not** implemented yet, so
-voxen does **not** currently carry voice calls. It does not claim to.
+**Current build: phase 1 (foundation) + phase 3/4 vertical slice.**
+
+Implemented and tested end to end:
+
+- Ed25519 identity, signed session statements, replay protection, roster
+  authentication (phase 1).
+- **Real Pion WebRTC sessions with the identity-to-DTLS binding enforced at
+  runtime**, carrying Opus audio between two processes (phase 3).
+- A self-hosted WebSocket signaling server and client that relay SDP and ICE
+  (phase 4).
+
+What this means concretely: a two-peer call now works, and the security claim is
+backed by executable tests rather than documentation. `TestTwoPeerAuthenticatedSession`
+negotiates two live PeerConnections, completes the binding and passes audio.
+`TestMaliciousRelayCannotSubstituteFingerprint` and its siblings attack that path
+and are rejected.
+
+**Still not implemented: microphone and speaker capture.** Audio currently comes
+from a generated tone, so voxen cannot yet be used for a real conversation. The
+platform audio backends are phase 2. `voxen doctor` and `voxen status` report this
+honestly.
 
 ---
 
@@ -161,9 +178,32 @@ statement signed by a peer key it does not hold.
 | Observation never downgrades trust | `TestObserveDoesNotDowngradeOrRebind` |
 | Hand-edited trust store key/fingerprint mismatch rejected | `TestTrustStoreRejectsFingerprintKeyMismatch` |
 
-**Not yet tested** because the runtime path does not exist yet: the binding
-against a live Pion handshake. That is the phase 3 gate and voxen will not call a
-call encrypted until it passes.
+### Runtime binding tests (phase 3, executed against live Pion sessions)
+
+These run real DTLS handshakes over real UDP, not mocks:
+
+| Scenario | Test | File |
+|---|---|---|
+| Two peers negotiate, bind, and exchange audio | `TestTwoPeerAuthenticatedSession` | `internal/media` |
+| Each side binds the peer's actual certificate, not its own | `TestTwoPeerAuthenticatedSession` | `internal/media` |
+| Media is refused before authentication returns | `TestAudioRefusedBeforeAuthentication` | `internal/media` |
+| Statement signed by an unexpected identity rejected | `TestForgedStatementRejected` | `internal/media` |
+| SDP fingerprint rewritten by a relay rejected | `TestRewrittenSDPFingerprintRejected`, `TestMaliciousRelayCannotSubstituteFingerprint` | `internal/media`, `tests/integration` |
+| Statement replay rejected after a successful use | `TestReplayedStatementRejected`, `TestSecondUseOfSameStatementIsReplay` | `internal/media` |
+| A tampering attempt does not burn the honest nonce | `TestRejectedTamperDoesNotBurnNonce` | `internal/media` |
+| Full path: real signaling server, two clients, audio flows | `TestSignalingRelayAndDirectMedia` | `tests/integration` |
+| Cross-room SDP injection not delivered | `TestSignalingRelayRejectsCrossRoomInjection` | `tests/integration` |
+| Server cannot be spoofed via the `from` field | `TestServerAssignsFromAndIgnoresSpoof` | `tests/integration` |
+| Selected ICE path is not relayed | `TestStatsShowDirectPath` | `internal/media` |
+
+The nonce-burning case is worth calling out. The replay guard commits a nonce
+only after the statement's signature **and** the SDP fingerprint both verify. An
+earlier ordering let a relay rewrite the SDP, have the offer rejected, and thereby
+poison the genuine offer as a replay — turning a failed attack into a denial of
+service. `TestRejectedTamperDoesNotBurnNonce` now pins that behaviour.
+
+**Not yet tested:** behaviour across real NAT, packet loss, and ICE restart under
+network change. Those need the multi-host harness in phase 8.
 
 ---
 
@@ -220,9 +260,11 @@ after confirming nobody is listening (`TestSecondDaemonIsRefused`).
 
 ## 8. Known limitations (explicit)
 
-1. **No audio or media in this build.** Phase 2 and 3 deliver them. Until a live
-   two-peer call with the DTLS binding has been tested, voxen makes no E2EE claim
-   about calls.
+1. **No microphone or speaker yet.** The media path is real and tested (a live
+   two-peer call with the DTLS binding carries Opus audio), but the audio comes
+   from a generated tone. Until phase 2 lands, voxen cannot carry a human voice.
+   The E2EE claim below applies to the media path that exists, not to a
+   microphone.
 2. **Metadata is public to the signaling server:** room IDs, participant
    identities, IP addresses observed by the server, and call timing. voxen does not
    attempt metadata privacy.

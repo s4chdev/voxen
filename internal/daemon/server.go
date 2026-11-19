@@ -7,6 +7,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -49,7 +50,7 @@ type Server struct {
 	media    media.Manager
 	replay   *security.ReplayGuard
 
-	signaling signaling.Connection
+	signaling *signaling.Client
 	room      *room.Room
 
 	listener net.Listener
@@ -105,18 +106,59 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 		identity: id,
 		trust:    trust,
 		audio:    audio.Null{},
-		media:    media.Unavailable{},
 		replay:   security.NewReplayGuard(security.DefaultReplayCapacity),
 		started:  time.Now().UTC(),
 		shutdown: make(chan struct{}),
 		sessions: make(map[string]context.CancelFunc),
 	}
 	s.muted.Store(false)
+
+	// Media is wired to the trust store through a resolver rather than by
+	// handing the media plane a key store. A session can therefore only be
+	// created for a fingerprint the local user has verified.
+	manager, err := media.NewWebRTCManager(media.ManagerConfig{
+		Identity:     signerAdapter{id: id},
+		Parameters:   media.DefaultOpusParameters(cfg.Audio.Bitrate, cfg.Audio.FrameMS),
+		STUNServers:  cfg.Network.STUNServers,
+		StatementTTL: time.Duration(cfg.Security.SessionTTLSeconds) * time.Second,
+		Logger:       opts.Logger.With("component", "media"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("daemon: create media manager: %w", err)
+	}
+	manager.SetPeerKeyResolver(func(fingerprint string) (ed25519.PublicKey, bool) {
+		fp, err := identity.ParseFingerprint(fingerprint)
+		if err != nil {
+			return nil, false
+		}
+		entry, ok := trust.Lookup(fp)
+		if !ok || entry.Level != identity.TrustVerified {
+			return nil, false
+		}
+		pub, err := entry.PublicKeyBytes()
+		if err != nil || pub == nil {
+			return nil, false
+		}
+		return pub, true
+	})
+	s.media = manager
+
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	return s, nil
 }
+
+// signerAdapter exposes only the signing capability of an identity to the media
+// plane. The media plane cannot read the key file, export the private key or
+// learn the seed through this interface.
+type signerAdapter struct {
+	id *identity.Identity
+}
+
+func (a signerAdapter) Sign(msg []byte) []byte { return a.id.Sign(msg) }
+
+func (a signerAdapter) PublicKey() ed25519.PublicKey { return a.id.PublicKey }
 
 // Identity exposes the loaded identity (read-only) for tests and diagnostics.
 func (s *Server) Identity() *identity.Identity { return s.identity }
@@ -355,12 +397,21 @@ func (s *Server) status() ipc.StatusResult {
 		Room:           s.roomState(),
 		Peers:          peers,
 		AudioState:     audioState(s.audio),
-		Capabilities: ipc.Capabilities{
-			Signaling: false,
-			Media:     false,
-			Audio:     false,
-			Group:     false,
-		},
+		Capabilities:   s.capabilities(),
+	}
+}
+
+// capabilities reports what this build can actually do. Media and signaling are
+// real; audio capture and group calling are not yet, and saying so is the whole
+// point of this method.
+func (s *Server) capabilities() ipc.Capabilities {
+	return ipc.Capabilities{
+		Signaling: true,
+		Media:     true,
+		// Audio requires the platform backends from phase 2.
+		Audio: false,
+		// Group mesh wiring lands with the room orchestration.
+		Group: false,
 	}
 }
 

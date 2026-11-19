@@ -7,7 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"crypto/ed25519"
 	"github.com/s4chdev/voxen/internal/audio"
+
+	"github.com/s4chdev/voxen/internal/identity"
+	"github.com/s4chdev/voxen/internal/media"
 
 	"github.com/s4chdev/voxen/internal/ipc"
 )
@@ -30,3 +34,19 @@ func hostAudioUsable(t *testing.T) bool {
 	defer cancel()
 	return audio.Probe(ctx, engine).Usable()
 }
+
+// testSigner adapts an in-memory identity to the media plane's LocalSigner.
+func testSigner(t *testing.T, name string) media.LocalSigner {
+	t.Helper()
+	id, err := identity.New(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signerForTest{id: id}
+}
+
+type signerForTest struct{ id *identity.Identity }
+
+func (s signerForTest) Sign(msg []byte) []byte { return s.id.Sign(msg) }
+
+func (s signerForTest) PublicKey() ed25519.PublicKey { return s.id.PublicKey }

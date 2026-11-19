@@ -50,6 +50,10 @@ type SessionConfig struct {
 	// never relays media.
 	STUNServers []string
 
+	// ConnectTimeout bounds how long to wait for a usable direct path before
+	// reporting failure. Zero uses DefaultConnectTimeout.
+	ConnectTimeout time.Duration
+
 	// StatementTTL bounds the signed statement's validity.
 	StatementTTL time.Duration
 
@@ -269,8 +273,10 @@ func NewWebRTCSession(ctx context.Context, cfg SessionConfig) (*WebRTCSession, e
 		s.log.Debug("peer connection state", "state", state.String(), "session", cfg.SessionID)
 		switch state {
 		case webrtc.PeerConnectionStateFailed:
-			s.setError("peer connection failed")
-			s.failAuth(ErrNotConnected)
+			// Pion only reaches Failed after ICE exhausted its candidates, so this
+			// is a direct-path failure rather than a transient blip.
+			s.setError("no direct path to peer; ICE failed")
+			s.failAuth(fmt.Errorf("%w: ICE failed after trying every candidate pair", ErrNoDirectRoute))
 		case webrtc.PeerConnectionStateClosed:
 			s.failAuth(ErrClosed)
 		}
@@ -640,7 +646,11 @@ func (s *WebRTCSession) Authenticate(ctx context.Context) (PeerInfo, error) {
 	// Wait for DTLS to complete. Polling the connection state is used rather
 	// than a channel because Pion delivers state changes on internal
 	// goroutines and a missed edge would block forever.
-	deadline := time.Now().Add(30 * time.Second)
+	timeout := s.cfg.ConnectTimeout
+	if timeout <= 0 {
+		timeout = DefaultConnectTimeout
+	}
+	deadline := time.Now().Add(timeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
@@ -651,8 +661,14 @@ func (s *WebRTCSession) Authenticate(ctx context.Context) (PeerInfo, error) {
 			return PeerInfo{}, ErrClosed
 		}
 		if time.Now().After(deadline) {
-			s.failAuth(ErrNotConnected)
-			return PeerInfo{}, ErrNotConnected
+			// Reaching the deadline means ICE exhausted every candidate pair
+			// without a working path. That is specifically a connectivity failure,
+			// not a generic error: with no TURN there is nothing else to try, and
+			// the user needs to know the call cannot be rescued by waiting.
+			err := fmtNoDirectPath(timeout)
+			s.setError(err.Error())
+			s.failAuth(err)
+			return PeerInfo{}, err
 		}
 		select {
 		case <-ctx.Done():
@@ -999,6 +1015,12 @@ func (s *WebRTCSession) Stats() SessionStats {
 		}
 	}
 	return out
+}
+
+// fmtNoDirectPath builds the connectivity failure message. It names the timeout
+// so an operator can tell "we gave up too early" from "the network is hostile".
+func fmtNoDirectPath(timeout time.Duration) error {
+	return fmt.Errorf("%w: no working candidate pair within %s", ErrNoDirectRoute, timeout)
 }
 
 // candidateSummary renders one candidate for diagnostics.

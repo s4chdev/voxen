@@ -289,3 +289,46 @@ on each platform before claiming support.
 
 Echo cancellation and noise suppression are still unimplemented; the config keys
 exist and `voxen doctor` will report them as unavailable rather than pretending.
+
+---
+
+## Progress update: the connectivity contract
+
+Three defects found by auditing what the docs promised against what the code did.
+All were in the same area and all were user-visible.
+
+### 1. The documented failure never happened
+
+`docs/security.md` promised that a failed direct path produces
+`media: no direct peer-to-peer path`. `ErrNoDirectRoute` existed but was **never
+returned**: a failed connection reported a generic "not connected" after a
+hardcoded 30 seconds, and `network.ice_timeout_ms` was validated and then ignored.
+
+Now the timeout is plumbed from configuration through the manager into the
+session, and both the deadline path and Pion's `Failed` state report
+`ErrNoDirectRoute` with the elapsed budget. The controller turns that into a
+per-peer message explaining that voxen does not relay and the call cannot be
+rescued by waiting.
+
+Tests: `TestNoDirectPathIsReportedSpecifically` (asserts the error identity *and*
+that the configured 300 ms timeout was honoured rather than a 30 s default),
+`TestConnectTimeoutDefaultMatchesConfig` (media default agrees with the config
+default), `TestNoDirectPathSurfacesToTheUser` (daemon boundary).
+
+### 2. Silent echo-cancellation and noise-suppression
+
+`audio.echo_cancellation` and `audio.noise_suppression` were accepted, defaulted
+to false, and did nothing. A user enabling them would have believed their echo
+was handled. Both now fail validation with an explanation. This is deliberate:
+a rejected config is honest, a silently ignored one is not.
+
+### 3. Documentation drift
+
+`docs/security.md` and the README now name both of the above, including that a
+speaker-based user will hear echo until AEC exists.
+
+### Next
+
+Service supervision (phase 7) is the highest-value remaining item: calls still
+end when the terminal closes. Then speaking indicators and per-peer mute, then
+AEC/NS.

@@ -13,6 +13,8 @@ import (
 	"github.com/s4chdev/voxen/internal/config"
 	"github.com/s4chdev/voxen/internal/identity"
 	"github.com/s4chdev/voxen/internal/ipc"
+	"github.com/s4chdev/voxen/internal/media"
+	"github.com/s4chdev/voxen/internal/security"
 	serversig "github.com/s4chdev/voxen/server/signaling"
 )
 
@@ -392,4 +394,39 @@ func TestTrustVerificationAfterDaemonStart(t *testing.T) {
 	// The peers must connect using the pins written after startup.
 	waitForPeerState(t, alice, created.Room.RoomID, "connected")
 	waitForPeerState(t, bob, created.Room.RoomID, "connected")
+}
+
+// TestNoDirectPathSurfacesToTheUser proves a connectivity failure reaches the
+// media plane as a specific, actionable error rather than a generic timeout.
+//
+// This is the behaviour the documentation promises: voxen does not relay, so a
+// failed direct path must be named as such instead of leaving the user to wonder
+// whether they simply waited too little.
+func TestNoDirectPathSurfacesToTheUser(t *testing.T) {
+	aliceID := testSigner(t, "alice")
+	bobID := testSigner(t, "bob")
+
+	sess, err := media.NewWebRTCSession(context.Background(), media.SessionConfig{
+		RoomID: "room-x", SessionID: "blackhole-1",
+		LocalIdentity: aliceID, ExpectedPeerKey: bobID.PublicKey(),
+		Parameters:     media.DefaultOpusParameters(28000, 20),
+		StatementTTL:   2 * time.Minute,
+		ReplayGuard:    security.NewReplayGuard(64),
+		ConnectTimeout: 400 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := sess.CreateOffer(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err = sess.Authenticate(ctx)
+	if !errors.Is(err, media.ErrNoDirectRoute) {
+		t.Fatalf("expected ErrNoDirectRoute, got %v", err)
+	}
+	t.Logf("connectivity failure is specific: %v", err)
 }

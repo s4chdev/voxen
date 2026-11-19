@@ -62,7 +62,7 @@ voxen create
 | Speaking indicators, per-peer mute | 6 |
 | Explicit admission and removal (`admit` / `remove`) | 6 |
 | systemd / launchd units, Windows service | 7 |
-| Echo cancellation and noise suppression | 8 |
+| Echo cancellation and noise suppression (config rejects the flags until then) | 8 |
 | Windows/macOS audio verified on real hardware | needs a run on those hosts |
 
 ---

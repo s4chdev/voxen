@@ -36,6 +36,9 @@ type ManagerConfig struct {
 	// STUNServers come from local configuration only. A signaling server cannot
 	// inject one.
 	STUNServers []string
+	// ConnectTimeout bounds how long a session waits for a direct path.
+	ConnectTimeout time.Duration
+
 	// StatementTTL bounds signed statement validity.
 	StatementTTL time.Duration
 	Logger       *slog.Logger
@@ -96,6 +99,7 @@ func (m *WebRTCManager) NewSession(ctx context.Context, spec SessionSpec) (Sessi
 		ExpectedPeerKey: pub,
 		Parameters:      m.cfg.Parameters,
 		STUNServers:     m.cfg.STUNServers,
+		ConnectTimeout:  m.cfg.ConnectTimeout,
 		StatementTTL:    m.cfg.StatementTTL,
 		ReplayGuard:     m.replay,
 		Logger:          m.log,

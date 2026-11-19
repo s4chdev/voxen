@@ -124,11 +124,12 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 	// handing the media plane a key store. A session can therefore only be
 	// created for a fingerprint the local user has verified.
 	manager, err := media.NewWebRTCManager(media.ManagerConfig{
-		Identity:     signerAdapter{id: id},
-		Parameters:   media.DefaultOpusParameters(cfg.Audio.Bitrate, cfg.Audio.FrameMS),
-		STUNServers:  cfg.Network.STUNServers,
-		StatementTTL: time.Duration(cfg.Security.SessionTTLSeconds) * time.Second,
-		Logger:       opts.Logger.With("component", "media"),
+		Identity:       signerAdapter{id: id},
+		Parameters:     media.DefaultOpusParameters(cfg.Audio.Bitrate, cfg.Audio.FrameMS),
+		STUNServers:    cfg.Network.STUNServers,
+		ConnectTimeout: time.Duration(cfg.Network.ICETimeoutMS) * time.Millisecond,
+		StatementTTL:   time.Duration(cfg.Security.SessionTTLSeconds) * time.Second,
+		Logger:         opts.Logger.With("component", "media"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("daemon: create media manager: %w", err)

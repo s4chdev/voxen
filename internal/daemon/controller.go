@@ -637,10 +637,18 @@ func (c *Controller) onCandidate(ctx context.Context, env protocol.Envelope) {
 }
 
 func (c *Controller) failSession(peerID string, err error) {
+	// Give the user the actual reason. "no direct path" and "authentication
+	// failed" call for completely different responses, and a generic message
+	// would hide which one happened.
+	reason := err.Error()
+	if errors.Is(err, media.ErrNoDirectRoute) {
+		reason = "no direct path to peer. voxen does not relay media, so this call " +
+			"cannot connect; both sides need a network that allows direct UDP or a STUN server that does"
+	}
 	c.mu.Lock()
 	if ps, ok := c.sessions[peerID]; ok {
 		ps.state = room.ConnFailed
-		ps.lastError = err.Error()
+		ps.lastError = reason
 		if ps.session != nil {
 			_ = ps.session.Close()
 		}
@@ -648,7 +656,7 @@ func (c *Controller) failSession(peerID string, err error) {
 	}
 	c.mu.Unlock()
 	c.log.Warn("peer session failed", "peer", peerID, "error", err)
-	c.recordEvent(ipc.RoomEvent{Kind: "peer_failed", PeerID: peerID, Message: err.Error()})
+	c.recordEvent(ipc.RoomEvent{Kind: "peer_failed", PeerID: peerID, Message: reason})
 }
 
 // LeaveRoom tears down every session and disconnects from signaling.

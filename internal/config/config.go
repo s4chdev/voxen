@@ -87,9 +87,11 @@ type AudioConfig struct {
 	SampleRate   int    `yaml:"sample_rate"`
 	FrameMS      int    `yaml:"frame_ms"`
 	Bitrate      int    `yaml:"bitrate_bps"`
-	// EchoCancellation and NoiseSuppression enable backend support when the
-	// audio backend provides it. They are evaluated in phase 2; the flags are
-	// part of the configuration schema from phase 1.
+	// EchoCancellation and NoiseSuppression are not implemented. miniaudio's
+	// WebRTC preprocessing is not wired in, and silently accepting these flags
+	// would tell a user their echo was handled when it was not. Setting either to
+	// true is a validation error with an explanation, which is the honest
+	// behaviour until the processing exists.
 	EchoCancellation  bool `yaml:"echo_cancellation"`
 	NoiseSuppression  bool `yaml:"noise_suppression"`
 	InputGainPercent  int  `yaml:"input_gain_percent"`
@@ -332,6 +334,12 @@ func (c Config) Validate() error {
 	}
 	if c.Audio.Bitrate < MinBitrate || c.Audio.Bitrate > MaxBitrate {
 		add("audio.bitrate_bps: must be between %d and %d", MinBitrate, MaxBitrate)
+	}
+	if c.Audio.EchoCancellation {
+		add("audio.echo_cancellation: not implemented yet; declaring it true would claim echo cancellation voxen does not perform")
+	}
+	if c.Audio.NoiseSuppression {
+		add("audio.noise_suppression: not implemented yet; declaring it true would claim suppression voxen does not perform")
 	}
 	if c.Audio.InputGainPercent < 0 || c.Audio.InputGainPercent > 200 {
 		add("audio.input_gain_percent: must be between 0 and 200")

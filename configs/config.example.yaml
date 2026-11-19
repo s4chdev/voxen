@@ -38,8 +38,9 @@ audio:
   frame_ms: 20
   # 24–32 kbps is the intended range for speech. Range: 6000–510000.
   bitrate_bps: 28000
-  # Evaluated in phase 2 against the platform backend. Enabling a feature the
-  # backend cannot provide is reported by "voxen doctor", not silently ignored.
+  # Not implemented. These must stay false: setting either to true is a
+  # configuration error, because accepting it would imply voxen cancels echo or
+  # suppresses noise when it does neither.
   echo_cancellation: false
   noise_suppression: false
   input_gain_percent: 100

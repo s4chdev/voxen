@@ -21,6 +21,11 @@ import (
 	"github.com/s4chdev/voxen/internal/security"
 )
 
+// DefaultConnectTimeout bounds how long a session waits for a usable direct path.
+// It mirrors the default network.ice_timeout_ms so the media plane and the
+// configuration agree even when no timeout is supplied.
+const DefaultConnectTimeout = 15 * time.Second
+
 // Errors from the media plane.
 var (
 	ErrNotConnected    = errors.New("media: peer connection is not established")

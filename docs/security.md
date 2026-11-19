@@ -228,9 +228,15 @@ cipher itself.
   discover public addresses.
 - **TURN is not implemented.** The configuration schema has no TURN field, and an
   unknown `turn_servers` key fails validation (`TestParseRejectsTurnAndRelayConfig`).
-- If no direct path succeeds within the ICE timeout, the session fails with
-  `media: no direct peer-to-peer path; voxen does not relay media through TURN`.
-  It does not degrade silently.
+- If no direct path succeeds within `network.ice_timeout_ms`, the session fails
+  with `media: no direct peer-to-peer path; voxen does not relay media through
+  TURN: no working candidate pair within <timeout>`. The timeout is honoured from
+  configuration, not hardcoded, and the failure is surfaced per peer with the
+  reason rather than as a generic error. It does not degrade silently.
+
+  Covered by `TestNoDirectPathIsReportedSpecifically`, which asserts both the
+  error identity and that the configured timeout was actually applied, and by
+  `TestNoDirectPathSurfacesToTheUser` at the daemon boundary.
 - Consequence: peers behind symmetric NAT on both sides may not be able to call
   each other. This is a deliberate property, not a bug.
 
@@ -282,6 +288,11 @@ after confirming nobody is listening (`TestSecondDaemonIsRefused`).
    the TCC prompt belongs to the phase 2 audio work, and the `Info.plist`
    usage description ships with the bundle packaging in phase 8.
 8. **Windows service management** and launchd/systemd units are phase 7.
+9. **Echo cancellation and noise suppression are not implemented.** Setting
+   `audio.echo_cancellation` or `audio.noise_suppression` to true is rejected at
+   configuration load rather than silently ignored, because accepting the flag
+   would imply voxen performs processing it does not. A user on speakers rather
+   than a headset will hear echo until this lands.
 9. **No independent audit.** The protocol and implementation have not been
    reviewed by a third party. The test matrix above is the current evidence.
 

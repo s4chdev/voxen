@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -355,8 +356,8 @@ func (c Config) Validate() error {
 	}
 
 	if c.Daemon.Socket != "" {
-		if !filepath.IsAbs(c.Daemon.Socket) && !isWindowsPipe(c.Daemon.Socket) {
-			add("daemon.socket: must be an absolute path or a Windows named pipe")
+		if err := validateEndpoint(c.Daemon.Socket); err != nil {
+			add("daemon.socket: %v", err)
 		}
 	}
 	if c.Daemon.StartupTimeoutMS < 1000 || c.Daemon.StartupTimeoutMS > 60000 {
@@ -521,4 +522,24 @@ func validateSTUNURL(raw string) error {
 
 func isWindowsPipe(s string) bool {
 	return strings.HasPrefix(strings.ToLower(s), `\\.\pipe\`)
+}
+
+// validateEndpoint checks that daemon.socket matches the transport the current
+// platform actually uses. Accepting a Unix socket path on Windows (or a pipe
+// name on Linux) would defer the error to listen time, where it reads as an
+// opaque transport failure.
+func validateEndpoint(socket string) error {
+	if runtime.GOOS == "windows" {
+		if !isWindowsPipe(socket) {
+			return fmt.Errorf("%q is not a named pipe path; on Windows use \\\\.\\pipe\\<name>", socket)
+		}
+		return nil
+	}
+	if isWindowsPipe(socket) {
+		return fmt.Errorf("%q is a Windows named pipe; on %s set an absolute filesystem path", socket, runtime.GOOS)
+	}
+	if !filepath.IsAbs(socket) {
+		return fmt.Errorf("%q must be an absolute path", socket)
+	}
+	return nil
 }

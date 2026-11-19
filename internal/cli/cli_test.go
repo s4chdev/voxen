@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -56,13 +57,16 @@ func TestInitCreatesIdentityAndConfig(t *testing.T) {
 		t.Fatalf("config file missing: %v", err)
 	}
 
-	// Config must be private.
-	info, err := os.Stat(sb.configPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("config mode = %04o", info.Mode().Perm())
+	// Config must be private. Windows has no POSIX mode bits; the per-user
+	// directory ACL is the boundary there and is covered by the transport code.
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(sb.configPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("config mode = %04o", info.Mode().Perm())
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -83,6 +84,38 @@ func TestTLSVerifySkipAllowedOnLoopback(t *testing.T) {
 	}
 }
 
+// TestEndpointMustMatchPlatformTransport guards the error a Windows user would
+// otherwise only see as an opaque "not a named pipe path" at listen time.
+func TestEndpointMustMatchPlatformTransport(t *testing.T) {
+	cfg := Default()
+	cfg.Daemon.Socket = `\\.\pipe\voxen-test`
+	err := cfg.Validate()
+	if runtime.GOOS == "windows" {
+		if err != nil {
+			t.Fatalf("a pipe path should be valid on Windows: %v", err)
+		}
+	} else if err == nil || !strings.Contains(err.Error(), "Windows named pipe") {
+		t.Fatalf("a pipe path should be rejected off Windows, got %v", err)
+	}
+
+	cfg = Default()
+	cfg.Daemon.Socket = filepath.Join(t.TempDir(), "voxend.sock")
+	err = cfg.Validate()
+	if runtime.GOOS == "windows" {
+		if err == nil || !strings.Contains(err.Error(), "named pipe") {
+			t.Fatalf("a Unix socket path should be rejected on Windows, got %v", err)
+		}
+	} else if err != nil {
+		t.Fatalf("an absolute Unix socket path should be valid: %v", err)
+	}
+
+	cfg = Default()
+	cfg.Daemon.Socket = "relative.sock"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a relative socket path should be rejected")
+	}
+}
+
 func TestRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -97,7 +130,9 @@ func TestRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// POSIX permission bits are not meaningful on Windows, where the per-user
+	// %APPDATA% ACL is the security boundary instead.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("config permissions = %04o, want 0600", info.Mode().Perm())
 	}
 

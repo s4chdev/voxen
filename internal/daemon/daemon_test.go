@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,12 @@ func newProfile(t *testing.T, passphrase []byte) *profile {
 		IdentityFile: filepath.Join(dir, "config", "identity.json"),
 		LogFile:      filepath.Join(dir, "logs", "voxend.log"),
 		PIDFile:      filepath.Join(dir, "state", "voxend.pid"),
-		SocketPath:   filepath.Join(dir, "run", "voxend.sock"),
+		// The endpoint must use the platform's transport: a Unix socket path on
+		// Windows is rejected by the named-pipe listener, and vice versa.
+		SocketPath: paths.PipeName(filepath.Join(dir, "config")),
+	}
+	if runtime.GOOS != "windows" {
+		p.SocketPath = filepath.Join(dir, "run", "voxend.sock")
 	}
 	if err := p.Ensure(); err != nil {
 		t.Fatal(err)

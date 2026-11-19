@@ -1,0 +1,38 @@
+[Unit]
+Description=voxen encrypted peer-to-peer voice daemon
+Documentation=https://github.com/s4chdev/voxen
+# The daemon needs the user's audio session (PipeWire/PulseAudio), which is
+# started by the user manager, not at boot.
+After=pipewire.service wireplumber.service pulseaudio.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Use an absolute path: systemd user units do not inherit an interactive PATH.
+ExecStart=%h/.local/bin/voxend --foreground
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2s
+# Give an in-flight call a moment to close cleanly.
+TimeoutStopSec=5s
+
+# Hardening. The daemon needs no privileges at all.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/voxen %h/.local/state/voxen
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+# State and log directories are created by "voxen init" with 0700/0600 modes.
+# Do not point these at shared locations.
+
+[Install]
+WantedBy=default.target

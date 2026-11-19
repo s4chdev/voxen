@@ -1,0 +1,248 @@
+# voxen
+
+Peer-to-peer, end-to-end encrypted voice calls from the terminal, for Linux,
+Windows and macOS. One Go core, a background daemon, and a CLI you can script.
+
+```
+voxen init --name alice
+voxen start
+voxen verify C6971DF6ABDD7317B89178DEFBB2BF88E21A24699C7E27F48EB1090B51E8C1D9
+voxen create
+```
+
+> **Build status: phase 1 (foundation).**
+> Identity, configuration, the daemon, the private IPC layer, the CLI, the room
+> and security state machines are implemented and tested. **Audio, WebRTC media
+> and the signaling transport are not implemented yet**, so voxen does not
+> carry calls in this build. `voxen status` and `voxen doctor` say so explicitly,
+> and every unimplemented command exits with code `4` instead of pretending.
+> See [docs/plan.md](docs/plan.md) for what each phase delivers.
+
+---
+
+## What works today
+
+- `voxen init` — Ed25519 identity, `0600` key file with optional
+  passphrase-based encryption, explicit trust store, validated YAML config.
+- `voxen start` / `stop` / `restart` — background daemon or foreground mode,
+  private Unix socket (`0600`, same-UID peer check) or Windows named pipe (ACL
+  restricted to your account).
+- `voxen status` / `peers` / `devices` / `config` / `logs` / `doctor` — honest
+  state, including which subsystems are actually available.
+- `voxen identity` / `verify` / `revoke` / `trust` — fingerprint display and
+  out-of-band trust management.
+- `voxen mute` / `unmute` — state tracked by the daemon.
+- Security primitives: signed session statements with DTLS-fingerprint binding,
+  deterministic canonical encodings, replay protection, administrator-signed
+  room rosters with rollback rejection.
+- Tests: unit, IPC, daemon, CLI, process-level integration, security acceptance,
+  all clean under `-race`.
+
+## What does not work yet
+
+| Feature | Phase |
+|---|---|
+| Microphone/speaker capture, Opus | 2 |
+| WebRTC peer connections, live DTLS binding | 3 |
+| Signaling client and self-hosted server | 4 |
+| Group (mesh) calls | 6 |
+| `create` / `join` / `leave` | 4 |
+| systemd / launchd units, Windows service | 7 |
+
+---
+
+## Requirements
+
+- Go 1.25 or newer (the repo builds with 1.27).
+- That is the entire requirement for phase 1: no cgo, no audio libraries, no
+  external services.
+- Phase 2 will add Opus and audio backends; `make deps` prints the list when it
+  lands.
+
+## Build
+
+```sh
+make build          # bin/voxen and bin/voxend
+make test           # unit + integration + security suites
+make test-race      # everything under the race detector
+make cross          # verify all six platform targets compile
+make dist           # release archives in dist/
+```
+
+Without `make`:
+
+```sh
+go build -trimpath -o bin/voxen ./cmd/voxen
+go build -trimpath -o bin/voxend ./cmd/voxend
+go test ./...
+```
+
+### Platform build notes
+
+**Linux**
+
+```sh
+make build
+./bin/voxen init --name "$USER"
+```
+
+Configuration lives in `~/.config/voxen`, state and logs in
+`~/.local/state/voxen`, and the socket in `$XDG_RUNTIME_DIR/voxen`.
+
+**macOS**
+
+```sh
+make build
+./bin/voxen init --name "$USER"
+```
+
+Configuration lives in `~/Library/Application Support/voxen` and logs in
+`~/Library/Logs/voxen`. Fingerprint and IPC behaviour is identical to Linux. The
+microphone permission prompt arrives with the phase 2 audio backend and the
+bundle `Info.plist` (`NSMicrophoneUsageDescription`).
+
+**Windows (PowerShell)**
+
+```powershell
+go build -trimpath -o bin\voxen.exe .\cmd\voxen
+go build -trimpath -o bin\voxend.exe .\cmd\voxend
+.\bin\voxen.exe init --name $env:USERNAME
+.\bin\voxen.exe start
+```
+
+Configuration lives in `%APPDATA%\voxen`; logs in `%LOCALAPPDATA%\voxen\logs`.
+The daemon endpoint is a named pipe named after the profile, restricted by a
+security descriptor to your account, SYSTEM and Administrators. `voxen start`
+detaches the daemon into its own process group with no console window.
+
+## Quick start
+
+```sh
+voxen init --name alice          # create identity + config
+voxen start                      # start the daemon in the background
+voxen status                     # see what is running and what is available
+voxen identity                   # your fingerprint
+voxen doctor                     # diagnostics, including honest gaps
+voxen stop
+```
+
+With a passphrase-protected key:
+
+```sh
+export VOXEN_KEY_PASSPHRASE='a long passphrase'
+voxen init --name alice --force   # rotates the key and encrypts it
+voxen start                       # the daemon needs the same variable
+```
+
+Verifying a peer (this gates media once calls exist):
+
+```sh
+# Read the peer's fingerprint over a channel you already trust (in person,
+# a signed message, a previous authenticated call), then record it:
+voxen verify "C697 1DF6 ABDD 7317 B891 78DE FBB2 BF88 E21A 2469 9C7E 27F4 8EB1 090B 51E8 C1D9" \
+     --name bob --note "read over the phone 2026-11-19"
+voxen trust      # shows the pin, and later whether a key is bound to it
+voxen revoke "C697 ..."
+```
+
+Trust is anchored on the fingerprint, like SSH host keys. You can pin a
+fingerprint before ever connecting; the key that peer presents in the first
+session must hash to it, or the call is refused.
+
+## Commands
+
+```
+voxen init                       Create identity and configuration
+voxen start [--foreground]       Start the daemon
+voxen stop [--force]             Stop the daemon
+voxen restart                    Restart the daemon
+voxen status [-w]                Daemon, room, audio and capability state
+voxen peers                      Participants and their trust/connection state
+voxen devices                    Microphones and speakers
+voxen config [--path]            Effective configuration (and "config reload")
+voxen logs [-n N]                Daemon log tail
+voxen doctor                     Diagnostics with actionable hints
+voxen mute | unmute              Microphone state
+voxen create | join | leave      Rooms (phase 4)
+voxen identity                   Local fingerprint
+voxen verify <fp>                Verify a peer out of band
+voxen trust | revoke <fp>        Inspect or revoke trust
+voxen version                    Build and phase information
+```
+
+Global flags: `--json` for machine-readable output, `--config <path>`,
+`--timeout <duration>`.
+
+Exit codes: `0` ok, `1` error, `2` usage, `3` daemon unavailable,
+`4` feature not in this build, `5` authentication/authorization failure.
+
+## Configuration
+
+Generated by `voxen init`; a commented reference is in
+[`configs/config.example.yaml`](configs/config.example.yaml). Several entries are
+security decisions and cannot be relaxed:
+
+- `security.require_verified_peers` must be `true`.
+- `audio.sample_rate` must be `48000` (the media profile normalises to 48 kHz mono).
+- There is no TURN setting. `network.turn_servers` is rejected as an unknown key.
+- `identity.file` and `daemon.socket` changes require a restart, not a reload.
+
+Environment overrides for isolated profiles are documented in
+[`internal/paths`](internal/paths/paths.go): `VOXEN_CONFIG_DIR`, `VOXEN_STATE_DIR`,
+`VOXEN_RUNTIME_DIR`, `VOXEN_SOCKET`, `VOXEN_CONFIG`, `VOXEN_KEY_PASSPHRASE`.
+
+## Security model, in one paragraph
+
+voxen binds each peer's Ed25519 identity to the DTLS certificate that is actually
+negotiated. A peer signs a short-lived, nonce-protected statement containing the
+SHA-256 of its DTLS certificate; after the handshake the receiver hashes the
+negotiated certificate and requires an exact match before any audio is attached.
+The signaling server relays SDP and ICE but cannot forge that statement, so it
+cannot insert itself into the media path. Media only goes to peers whose
+fingerprint you verified out of band, and a fingerprint pin can be recorded
+before the peer is ever seen. There is no TURN and no relay fallback: if a direct
+path fails, the call fails loudly. Full threat model, tested scenarios and known
+limitations: [`docs/security.md`](docs/security.md).
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Component boundaries, planes, data flow, cross-platform matrix |
+| [docs/adr.md](docs/adr.md) | Ten architecture decision records with alternatives and consequences |
+| [docs/security.md](docs/security.md) | Threat model, binding protocol, tested scenarios, limitations |
+| [docs/protocol.md](docs/protocol.md) | Signaling wire protocol, handshake, rooms, errors |
+| [docs/dependencies.md](docs/dependencies.md) | Every dependency, licence, and why it was chosen |
+| [docs/plan.md](docs/plan.md) | Phase-by-phase plan with tests and exit criteria |
+
+## Project layout
+
+```
+cmd/voxen/            CLI entry point
+cmd/voxend/           daemon entry point
+internal/
+  audio/             platform-independent audio interfaces
+  cli/               Cobra commands, rendering, process lifecycle
+  config/            YAML schema and validation
+  daemon/            request routing, diagnostics, capability reporting
+  fsutil/            atomic private-file writes
+  identity/          Ed25519 identity, key storage, trust store
+  ipc/               local control protocol and platform transports
+  logging/           slog configuration
+  media/             media-plane contract and quality stats
+  paths/             per-platform directory resolution
+  room/              room state machine, admission, rosters
+  security/          signed statements, DTLS binding, replay guard
+  signaling/         control-plane wire protocol
+  version/           build metadata
+platform/            per-OS audio backends (phase 2)
+server/signaling/    self-hosted signaling server (phase 4)
+tests/integration/   process-level end-to-end tests
+tests/security/      security acceptance scenarios
+configs/ packaging/  example config and service units
+```
+
+## Licence
+
+See [LICENSE](LICENSE). Dependencies and their licences are in
+[docs/dependencies.md](docs/dependencies.md).

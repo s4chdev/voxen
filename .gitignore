@@ -1,0 +1,18 @@
+# build artifacts
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# local developer tooling
+.idea/
+.vscode/
+.DS_Store
+
+# runtime data that must never be committed
+*.sock
+*.pid
+identity.json
+config.yaml
+logs/

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  voxen launchd user agent.
+
+  Install to ~/Library/LaunchAgents/sh.voxen.voxend.plist and load with:
+    launchctl load -w ~/Library/LaunchAgents/sh.voxen.voxend.plist
+
+  Replace USERNAME below, or generate the file with "voxen install-agent" once
+  phase 7 lands. Keep the plist at mode 0600: it must not contain secrets, but
+  it names private paths.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>sh.voxen.voxend</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/USERNAME/.local/bin/voxend</string>
+        <string>--foreground</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Interactive</string>
+
+    <!-- Audio capture requires the user session; do not start at boot. -->
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/Library/Logs/voxen/voxend.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/Library/Logs/voxen/voxend.err.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Set VOXEN_KEY_PASSPHRASE here only if you accept that the file at
+             0600 is the protection boundary for an unattended agent. -->
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

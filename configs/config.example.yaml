@@ -1,0 +1,80 @@
+# voxen configuration (schema version 1)
+#
+# Copy this file to your config directory:
+#   Linux   $XDG_CONFIG_HOME/voxen/config.yaml        (usually ~/.config/voxen/)
+#   macOS   ~/Library/Application Support/voxen/config.yaml
+#   Windows %APPDATA%\voxen\config.yaml
+#
+# Or simply run: voxen init
+#
+# This file contains no key material. Unknown keys are rejected so a typo in a
+# security-relevant setting fails loudly rather than silently using a default.
+
+version: 1
+
+identity:
+  # Shown to peers. Never used for authentication: the Ed25519 fingerprint is.
+  display_name: ""
+  # Private key path. Relative paths resolve against this file's directory.
+  # Keep the file at mode 0600; voxen refuses to load a looser key file.
+  file: identity.json
+
+signaling:
+  # A self-hosted signaling server. voxen never sends audio through it.
+  # Use wss:// in production. Credentials in the URL are rejected; if your
+  # deployment needs a token, supply it through the environment, not here.
+  url: wss://signal.example.net/ws
+  timeout_ms: 10000
+  # Only accepted for loopback URLs, and only for local testing.
+  tls_skip_verify: false
+
+audio:
+  # Empty selects the system default. Use "voxen devices" to list IDs.
+  input_device: ""
+  output_device: ""
+  # Fixed by the media profile; must be 48000.
+  sample_rate: 48000
+  # Opus frame size. 20 ms is the interoperable default.
+  frame_ms: 20
+  # 24–32 kbps is the intended range for speech. Range: 6000–510000.
+  bitrate_bps: 28000
+  # Evaluated in phase 2 against the platform backend. Enabling a feature the
+  # backend cannot provide is reported by "voxen doctor", not silently ignored.
+  echo_cancellation: false
+  noise_suppression: false
+  input_gain_percent: 100
+  output_gain_percent: 100
+
+network:
+  # STUN only. TURN is deliberately unsupported: voxen never relays media.
+  # At most 4 servers. If peers cannot connect directly, the call fails.
+  stun_servers:
+    - stun:stun.l.google.com:19302
+  # How long to wait for a direct path before reporting failure.
+  ice_timeout_ms: 15000
+  # Publish candidates via mDNS. Off by default so candidates are explicit.
+  enable_mdns: false
+  interface_filter: []
+
+daemon:
+  # Empty uses the platform default:
+  #   Linux/macOS  $XDG_RUNTIME_DIR/voxen/voxend.sock
+  #   Windows      \\.\pipe\voxen-<profile>
+  # Must be absolute if set.
+  socket: ""
+  startup_timeout_ms: 5000
+
+logging:
+  level: info          # debug | info | warn | error
+  format: text         # text | json
+  # Empty uses the platform log directory. Logs never contain key material.
+  file: ""
+
+security:
+  # voxen refuses to start if this is false: media is only sent to peers whose
+  # fingerprint you verified out of band.
+  require_verified_peers: true
+  # Lifetime of a signed session statement, in seconds (30–3600).
+  session_ttl_seconds: 300
+  # Tolerated clock skew between peers, in seconds (5–300).
+  max_clock_skew_seconds: 60

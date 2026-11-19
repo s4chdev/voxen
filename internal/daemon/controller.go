@@ -25,6 +25,7 @@ var (
 	ErrNoRoom        = errors.New("controller: not in a room")
 	ErrRoomBusy      = errors.New("controller: already in a room")
 	ErrSignalingDown = errors.New("controller: signaling server is unreachable")
+	ErrPeerUnknown   = errors.New("controller: no such participant")
 )
 
 // Controller joins the control plane (signaling + room state) to the media plane
@@ -38,6 +39,10 @@ type Controller struct {
 	media media.Manager
 	trust PeerResolver
 	log   Logger
+	// onPeerGone is called when a participant leaves, so per-peer state held
+	// outside the controller (the audio bridge's speaking and mute maps) does not
+	// outlive the session and leak into a later rejoin.
+	onPeerGone func(peerID string)
 
 	mu       sync.Mutex
 	client   *signaling.Client
@@ -92,6 +97,12 @@ type peerSession struct {
 	session     media.Session
 	state       room.ConnectionState
 	lastError   string
+	// speaking is set by the audio bridge when this peer's audio is above the
+	// speech threshold. It is local observation, not a claim from the peer.
+	speaking bool
+	// muted suppresses this peer's audio locally. It is a local playback control:
+	// the peer keeps sending, and voxen simply does not play it.
+	muted bool
 	// offerer records whether this side initiated negotiation, for diagnostics.
 	offerer bool
 }
@@ -655,6 +666,9 @@ func (c *Controller) failSession(peerID string, err error) {
 		delete(c.sessions, peerID)
 	}
 	c.mu.Unlock()
+	if c.onPeerGone != nil {
+		c.onPeerGone(peerID)
+	}
 	c.log.Warn("peer session failed", "peer", peerID, "error", err)
 	c.recordEvent(ipc.RoomEvent{Kind: "peer_failed", PeerID: peerID, Message: reason})
 }
@@ -708,6 +722,9 @@ func (c *Controller) onPeerLeft(_ context.Context, peerID string) {
 	}
 	if ps.session != nil {
 		_ = ps.session.Close()
+	}
+	if c.onPeerGone != nil {
+		c.onPeerGone(peerID)
 	}
 	c.log.Info("peer left", "peer", peerID)
 	c.recordEvent(ipc.RoomEvent{Kind: "peer_left", PeerID: peerID})
@@ -769,15 +786,62 @@ func (c *Controller) roomState() ipc.RoomState {
 // identity binding completes is refused by the session itself, but excluding it
 // here avoids pointless work and keeps the capture loop cheap.
 func (c *Controller) Sessions() []media.Session {
+	peers := c.ActivePeers()
+	out := make([]media.Session, 0, len(peers))
+	for _, p := range peers {
+		out = append(out, p.Session)
+	}
+	return out
+}
+
+// ActivePeers returns the connected sessions with the identity they belong to.
+//
+// The audio bridge needs the identity to attribute received audio, which is what
+// makes a speaking indicator possible at all.
+func (c *Controller) ActivePeers() []media.ActivePeer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]media.Session, 0, len(c.sessions))
+	out := make([]media.ActivePeer, 0, len(c.sessions))
 	for _, ps := range c.sessions {
 		if ps.session != nil && ps.state == room.ConnConnected {
-			out = append(out, ps.session)
+			out = append(out, media.ActivePeer{
+				PeerID:      ps.peerID,
+				Fingerprint: ps.fingerprint,
+				DisplayName: ps.displayName,
+				Session:     ps.session,
+			})
 		}
 	}
 	return out
+}
+
+// SetPeerGoneHook installs a callback invoked when a participant leaves.
+func (c *Controller) SetPeerGoneHook(fn func(peerID string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.onPeerGone = fn
+}
+
+// setSpeaking records a peer's local speech state. Called by the audio bridge on
+// transitions only.
+func (c *Controller) setSpeaking(peerID string, speaking bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ps, ok := c.sessions[peerID]; ok {
+		ps.speaking = speaking
+	}
+}
+
+// SetPeerMuted records the local mute state for a participant.
+func (c *Controller) SetPeerMuted(peerID string, muted bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ps, ok := c.sessions[peerID]
+	if !ok {
+		return ErrPeerUnknown
+	}
+	ps.muted = muted
+	return nil
 }
 
 // Peers reports per-peer state for IPC.
@@ -800,6 +864,8 @@ func (c *Controller) Peers() []ipc.PeerState {
 			PacketLoss:  stats.PacketLoss,
 			LastError:   ps.lastError,
 			Direct:      !stats.Relayed && stats.LocalCandidate != "",
+			Speaking:    ps.speaking,
+			Muted:       ps.muted,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

@@ -383,3 +383,55 @@ is left. It passes here.
 macOS and Windows generate correct-looking units covered by content tests, but
 neither has been run under a real supervisor. Treat them as unproven until someone
 runs `voxen service install` on those machines.
+
+---
+
+## Progress update: speaking indicators and per-peer mute (phase 6)
+
+The two fields a call UI needs were previously fake: `PeerState.Speaking` was
+defined and never set, and `PeerState.Muted` had no per-peer meaning. Both are now
+real, so a UI built on top of the IPC peer listing tells the truth.
+
+### Delivered
+
+| Item | Evidence |
+|---|---|
+| Speech detection from decoded peer audio | `isSpeech`, `TestSpeechDetectionThreshold` |
+| Indicator lights and clears | `TestSpeakingIndicatorTracksPeerAudio` |
+| Local per-peer mute in the mix | `TestPerPeerMuteSilencesOnlyThatPeer` |
+| Muted peer still shown as speaking | `TestMutedPeerStillCountsAsSpeaking` |
+| Flags reach the IPC peer listing | `TestPeerFlagsReachIPC` |
+| `voxen peer-mute <id>` / `peer-mute off <id>` | `internal/cli/rooms.go` |
+| Per-peer state cleared on leave | `SetPeerGoneHook` + `forgetPeer` |
+
+### Decisions worth recording
+
+- **Speech detection is an RMS gate at roughly -40 dBFS.** Below normal speech and
+  above room noise, tested against silence, quiet noise, keyboard clicks and two
+  speech levels. It is deliberately conservative: a flickering indicator is worse
+  than none.
+- **A muted peer still shows as speaking.** The indicator reflects whether they are
+  talking, not whether you can hear them. Measuring after the local mute would make
+  the UI claim nobody is speaking while someone plainly is.
+- **Per-peer mute is a playback control, not a transmission one.** The peer keeps
+  sending, and voxen keeps reading their stream so it does not back up; the audio
+  simply never reaches the speaker.
+- **Peer state is cleared when someone leaves.** Without the hook, a returning peer
+  inherited a stale speaking indicator from their previous session.
+
+### Next: the TUI
+
+Stack is fixed by the project owner:
+
+| Library | Purpose |
+|---|---|
+| Bubble Tea | TUI application framework |
+| Lip Gloss | Styling and layout |
+| Bubbles | Reusable UI components |
+| Glamour | Markdown rendering |
+
+Order of work: a read-only call view first (participants, connection, direct path,
+RTT, loss, audio counters, speaking), polling the existing IPC on a short ticker —
+measured at ~6 ms per call, so polling is cheap enough. Input handling (mute keys,
+per-peer selection) comes second, once the view is proven. Glamour is for help and
+diagnostic text rendering, not the call view itself.

@@ -201,3 +201,47 @@ func (a *App) newRevokeCommand() *cobra.Command {
 	}
 	return cmd
 }
+
+// newPeerMuteCommand mutes or unmutes one participant locally.
+func (a *App) newPeerMuteCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "peer-mute <peer-id>",
+		Short: "Silence one participant locally",
+		Long: `Silence one participant on this machine.
+
+This is a local playback control: the participant keeps sending audio, and voxen
+keeps receiving it, but none of it reaches your speaker. Use "voxen mute" to stop
+your own microphone instead.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			muted := true
+			return a.setPeerMute(args[0], &muted)
+		},
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "off <peer-id>",
+		Short: "Restore a locally muted participant",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			muted := false
+			return a.setPeerMute(args[0], &muted)
+		},
+	})
+	return cmd
+}
+
+func (a *App) setPeerMute(peerID string, muted *bool) error {
+	var res ipc.PeerMuteResult
+	if err := a.call(ipc.MethodPeerMuteSet, ipc.PeerMuteParams{PeerID: peerID, Muted: muted}, &res); err != nil {
+		return err
+	}
+	if a.jsonOut {
+		return a.printJSON(res)
+	}
+	if res.Muted {
+		fmt.Fprintf(a.stdout, "Silenced %s locally.\n", res.PeerID)
+	} else {
+		fmt.Fprintf(a.stdout, "Restored %s.\n", res.PeerID)
+	}
+	return nil
+}

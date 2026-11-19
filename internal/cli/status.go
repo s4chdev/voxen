@@ -167,7 +167,7 @@ func (a *App) newPeersCommand() *cobra.Command {
 				fmt.Fprintln(a.stdout, "No peers. voxen is not in a room, or nobody else has joined yet.")
 				return nil
 			}
-			t := &table{headers: []string{"PEER", "NAME", "FINGERPRINT", "TRUST", "CONNECTION", "PATH", "RTT"}}
+			t := &table{headers: []string{"PEER", "NAME", "FINGERPRINT", "TRUST", "CONNECTION", "PATH", "RTT", "SPEAKING", "MUTED"}}
 			for _, p := range res.Peers {
 				trust := "unverified"
 				if p.Verified {
@@ -192,7 +192,19 @@ func (a *App) newPeersCommand() *cobra.Command {
 				if name == "" {
 					name = "-"
 				}
-				t.add(p.ID, name, p.Fingerprint, trust, p.Connection, path, rtt)
+				// "speaking" is observed locally from audio levels, and only once
+				// the connection is authenticated: a peer with no media path cannot
+				// be shown as talking.
+				speaking := ""
+				if p.Speaking && p.Connection == "connected" {
+					speaking = "yes"
+				}
+				// "muted" here means muted by you, locally.
+				muted := ""
+				if p.Muted {
+					muted = "local"
+				}
+				t.add(p.ID, name, p.Fingerprint, trust, p.Connection, path, rtt, speaking, muted)
 			}
 			a.render(t)
 

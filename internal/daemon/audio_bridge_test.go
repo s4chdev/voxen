@@ -97,8 +97,11 @@ func TestAudioBridgeForwardsMicrophoneToPeers(t *testing.T) {
 	defer engine.Close()
 
 	sessions := []*fakeSession{newFakeSession(), newFakeSession()}
-	list := func() []media.Session {
-		return []media.Session{sessions[0], sessions[1]}
+	list := func() []media.ActivePeer {
+		return []media.ActivePeer{
+			{PeerID: "p1", Session: sessions[0]},
+			{PeerID: "p2", Session: sessions[1]},
+		}
 	}
 
 	bridge := daemon.NewAudioBridge(engine, slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -135,7 +138,9 @@ func TestAudioBridgeMixesPeersIntoPlayback(t *testing.T) {
 
 	a := newFakeSession()
 	b := newFakeSession()
-	list := func() []media.Session { return []media.Session{a, b} }
+	list := func() []media.ActivePeer {
+		return []media.ActivePeer{{PeerID: "a", Session: a}, {PeerID: "b", Session: b}}
+	}
 
 	bridge := daemon.NewAudioBridge(engine, slog.New(slog.NewTextHandler(io.Discard, nil)),
 		daemon.AudioBridgeConfig{}, list)
@@ -189,7 +194,9 @@ func TestAudioBridgeMuteSendsSilence(t *testing.T) {
 	defer engine.Close()
 
 	sess := newFakeSession()
-	list := func() []media.Session { return []media.Session{sess} }
+	list := func() []media.ActivePeer {
+		return []media.ActivePeer{{PeerID: "p1", Session: sess}}
+	}
 
 	bridge := daemon.NewAudioBridge(engine, slog.New(slog.NewTextHandler(io.Discard, nil)),
 		daemon.AudioBridgeConfig{Muted: true}, list)

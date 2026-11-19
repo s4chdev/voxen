@@ -68,6 +68,9 @@ type Server struct {
 	active   atomic.Int64
 	// audioUsable caches the startup probe result for the capability matrix.
 	audioUsable atomic.Bool
+	// mutedPeers is the local per-participant mute set, kept across calls.
+	mutedPeersMu sync.Mutex
+	mutedPeers   map[string]bool
 
 	mu       sync.Mutex
 	sessions map[string]context.CancelFunc
@@ -371,6 +374,8 @@ func (s *Server) route(ctx context.Context, req *ipc.Request) (any, error) {
 		return s.logsTail(req.Params)
 	case ipc.MethodMuteSet:
 		return s.setMute(req.Params)
+	case ipc.MethodPeerMuteSet:
+		return s.setPeerMute(req.Params)
 	case ipc.MethodDoctor:
 		return s.doctor(ctx), nil
 	case ipc.MethodRoomCreate:

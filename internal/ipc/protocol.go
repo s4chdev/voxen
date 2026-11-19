@@ -39,6 +39,7 @@ const (
 	MethodDevicesList    = "devices.list"
 	MethodLogsTail       = "logs.tail"
 	MethodMuteSet        = "mute.set"
+	MethodPeerMuteSet    = "peer.mute"
 	MethodRoomCreate     = "room.create"
 	MethodRoomJoin       = "room.join"
 	MethodRoomLeave      = "room.leave"
@@ -230,6 +231,18 @@ type Capabilities struct {
 // MuteParams sets the local mute state.
 type MuteParams struct {
 	Muted *bool `json:"muted,omitempty"`
+}
+
+// PeerMuteParams mutes or unmutes one participant locally.
+type PeerMuteParams struct {
+	PeerID string `json:"peer_id"`
+	Muted  *bool  `json:"muted,omitempty"`
+}
+
+// PeerMuteResult reports the resulting per-peer state.
+type PeerMuteResult struct {
+	PeerID string `json:"peer_id"`
+	Muted  bool   `json:"muted"`
 }
 
 // MuteResult reports the resulting state and whether a call was active.

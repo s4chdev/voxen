@@ -194,6 +194,19 @@ type Manager interface {
 	Close() error
 }
 
+// ActivePeer pairs a session with the identity it belongs to, so callers can
+// attribute audio and state to a participant.
+type ActivePeer struct {
+	// PeerID is the control-plane routing identifier.
+	PeerID string
+	// Fingerprint is the verified identity of the peer.
+	Fingerprint string
+	// DisplayName is what the peer calls itself.
+	DisplayName string
+	// Session is the live media session.
+	Session Session
+}
+
 // SessionSpec identifies one session to create.
 type SessionSpec struct {
 	// RoomID scopes the signed statement to a room.

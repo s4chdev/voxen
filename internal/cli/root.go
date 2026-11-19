@@ -160,6 +160,7 @@ relays audio: if two peers cannot connect directly, the call fails and says so.`
 		a.newCreateCommand(),
 		a.newJoinCommand(),
 		a.newLeaveCommand(),
+		a.newPeerMuteCommand(),
 		a.newIdentityCommand(),
 		a.newVerifyCommand(),
 		a.newTrustCommand(),

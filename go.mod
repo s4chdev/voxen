@@ -4,7 +4,10 @@ go 1.27.3
 
 require (
 	github.com/Microsoft/go-winio v0.6.4
+	github.com/gorilla/websocket v1.5.3
+	github.com/pion/webrtc/v4 v4.2.27
 	github.com/spf13/cobra v1.10.2
+	github.com/thesyncim/gopus v0.2.3
 	golang.org/x/crypto v0.59.0
 	golang.org/x/sys v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -12,7 +15,6 @@ require (
 
 require (
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/pion/datachannel v1.6.4 // indirect
 	github.com/pion/dtls/v3 v3.1.16 // indirect
@@ -29,9 +31,7 @@ require (
 	github.com/pion/stun/v4 v4.0.1 // indirect
 	github.com/pion/transport/v5 v5.1.5 // indirect
 	github.com/pion/turn/v5 v5.1.3 // indirect
-	github.com/pion/webrtc/v4 v4.2.27 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	github.com/thesyncim/gopus v0.2.3 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/time v0.14.0 // indirect

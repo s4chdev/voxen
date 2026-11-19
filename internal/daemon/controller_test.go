@@ -216,7 +216,15 @@ func waitForPeerState(t *testing.T, c *ipc.Client, roomID, want string) {
 		if err := c.Call(&ipc.Request{
 			Version: ipc.ProtocolVersion, ID: "poll", Method: ipc.MethodPeersList,
 		}, &peers); err != nil {
-			t.Fatalf("poll peers: %v", err)
+			// A transient IPC failure while the daemon is busy opening audio devices
+			// is not the thing under test. Retry until the deadline; a genuine
+			// problem still fails, with the last error reported.
+			lastErr := err
+			if time.Now().After(deadline.Add(-time.Second)) {
+				t.Fatalf("poll peers: %v (last error: %v)", err, lastErr)
+			}
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
 		last = peers.Peers
 		if len(peers.Peers) == 1 && peers.Peers[0].Connection == want {

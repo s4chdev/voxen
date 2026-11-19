@@ -14,11 +14,25 @@ Verified against the module graph in `go.sum` at the time of writing.
 | `golang.org/x/crypto` | v0.59.0 | BSD-3-Clause | scrypt KDF and XChaCha20-Poly1305 for optional key-file encryption. The Go team's repository; audited primitives, not a hobby implementation |
 | `golang.org/x/sys` | v0.50.0 | BSD-3-Clause | `unix.GetsockoptXucred` on macOS for the peer-UID check |
 | `github.com/Microsoft/go-winio` | v0.6.4 | MIT | Windows named pipes with an explicit security descriptor |
+| `github.com/charmbracelet/bubbletea` | v1.3.10 | MIT | TUI event loop and terminal control |
+| `github.com/charmbracelet/lipgloss` | v1.1.1 | MIT | TUI styling and layout |
+| `github.com/charmbracelet/bubbles` | v1.0.0 | MIT | Key bindings and the help component |
+| `github.com/charmbracelet/glamour` | v1.0.0 | MIT | Markdown rendering for the long-form help page |
 
 `go mod tidy` drops anything not imported, so this table cannot drift into
 listing modules the binary does not actually use. `github.com/gorilla/websocket`
 was evaluated and is committed to for phase 4, but is intentionally **not** a
 dependency yet: it will be added in the change that first imports it.
+
+### Why four TUI libraries rather than one
+
+They are separate concerns maintained by the same project: Bubble Tea owns the event
+loop, Lip Gloss owns styling, Bubbles provides components (the key-binding and help
+packages are used here), and Glamour renders markdown. Using Bubbles' key bindings
+rather than raw string switches means the help text and the input handling are
+generated from one definition, so help cannot describe a key that does not work.
+Glamour is confined to the help page: a markdown engine has no business in a view
+that redraws every second.
 
 ## Planned for later phases (not yet linked into the binary)
 

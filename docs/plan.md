@@ -419,19 +419,56 @@ real, so a UI built on top of the IPC peer listing tells the truth.
 - **Peer state is cleared when someone leaves.** Without the hook, a returning peer
   inherited a stale speaking indicator from their previous session.
 
-### Next: the TUI
+## Progress update: the TUI
 
-Stack is fixed by the project owner:
+`voxen tui` renders the live call. Built with the four requested libraries, each used
+where it genuinely fits rather than bolted on.
 
-| Library | Purpose |
+| Library | Use |
 |---|---|
-| Bubble Tea | TUI application framework |
-| Lip Gloss | Styling and layout |
-| Bubbles | Reusable UI components |
-| Glamour | Markdown rendering |
+| Bubble Tea | event loop, alternate screen, key dispatch |
+| Lip Gloss | styles and alignment |
+| Bubbles | key bindings (`key`) and the help component (`help`) |
+| Glamour | the long-form help page (`voxen tui --help-page`) |
 
-Order of work: a read-only call view first (participants, connection, direct path,
-RTT, loss, audio counters, speaking), polling the existing IPC on a short ticker —
-measured at ~6 ms per call, so polling is cheap enough. Input handling (mute keys,
-per-peer selection) comes second, once the view is proven. Glamour is for help and
-diagnostic text rendering, not the call view itself.
+### Structure
+
+The package separates rendering from the framework. `ViewModel` holds a snapshot and
+turns it into text; `Model` is the Bubble Tea model that polls and forwards keys.
+That split is why the view has 12 tests that assert on what a user would read without
+standing up a terminal, a daemon or a PTY.
+
+Bubbles' key bindings are the single source of truth for input matching, the short
+help line and the full help panel. `TestAllDocumentedKeysAreHandled` walks the same
+`KeyMap` the UI uses, so a key cannot work without being documented or be documented
+without working.
+
+### Decisions worth recording
+
+- **The TUI is a viewer and remote control, never an owner.** `q` exits the view; the
+  daemon keeps the call running for everyone else. The help text says so explicitly,
+  because a user who believes otherwise will not close it.
+- **A failed poll keeps the last good state on screen** with an "unreachable" badge
+  rather than blanking it, so a momentary IPC hiccup does not look like the call
+  ended.
+- **The PATH column claims nothing before connection.** `direct` is only shown once a
+  connection exists; before that it is `-`, because voxen has no relay and implying a
+  path would be a guess.
+- **Speaking is only shown for connected peers**, for the same reason: an indicator
+  on a peer with no media path is a claim the daemon cannot support.
+- **Polling is one second.** Measured at ~6 ms per status+peers round trip, so the
+  cost is negligible, and audio counters do not change meaningfully faster.
+
+### Verified
+
+Rendered against a real two-daemon call: participants, `direct` path, and audio
+counters climbing live (`sent 602 · received 603`). All 27 TUI tests pass under
+`-race`; the view, the key handling, and the Glamour help page are covered.
+
+### Caveat
+
+Interactive key delivery could not be exercised through `script(1)` in this
+environment because piped stdin is not delivered as Bubble Tea key events. Key
+handling is covered by unit tests driving `tea.KeyMsg` directly, which tests the same
+code path Bubble Tea calls, but a human has not yet pressed the keys in a real
+terminal.

@@ -37,6 +37,9 @@ voxen create
 - `voxen identity` / `verify` / `revoke` / `trust` — fingerprint display and
   out-of-band trust management.
 - `voxen mute` / `unmute` — state tracked by the daemon.
+- `voxen tui` — live call view: participants, connection state, whether the path is
+  direct, RTT, packet loss, who is speaking, and live audio counters. Keys mute you
+  or a selected participant. Closing it does not end the call.
 - `voxen service install` / `status` / `uninstall` — supervision under systemd
   (user unit), launchd (LaunchAgent) or Task Scheduler, so calls survive a crash
   and start at login. Verified end to end on Linux.

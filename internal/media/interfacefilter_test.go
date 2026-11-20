@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -49,14 +50,10 @@ func gatherWith(t *testing.T, filter []string) []string {
 	if _, err := sess.CreateOffer(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(3 * time.Second)
+	// Wait for gathering to settle rather than stopping at a count: comparing two
+	// sessions is only meaningful if both were given the same time to gather.
+	deadline := time.Now().Add(1500 * time.Millisecond)
 	for time.Now().Before(deadline) {
-		mu.Lock()
-		n := len(out)
-		mu.Unlock()
-		if n >= 3 {
-			break
-		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	mu.Lock()
@@ -169,16 +166,40 @@ func TestFilteredSessionStillConnects(t *testing.T) {
 	}
 }
 
-// TestEmptyFilterKeepsEverything proves the zero value is unchanged behaviour, so
-// existing configurations do not silently change meaning.
+// TestEmptyFilterKeepsEverything proves the zero value means "no restriction", so an
+// existing configuration does not silently change meaning.
+//
+// It compares host coverage rather than a candidate count: a machine may legitimately
+// have one address (a CI runner, or a host with only a loopback-routable interface),
+// and asserting "at least two" would fail there for no product reason.
 func TestEmptyFilterKeepsEverything(t *testing.T) {
 	all := gatherWith(t, nil)
 	empty := gatherWith(t, []string{})
-	if len(all) == 0 && len(empty) == 0 {
+	if len(all) == 0 {
 		t.Skip("no candidates gathered on this host")
 	}
-	// Both should gather the same set of addresses; port numbers differ per session.
-	if len(empty) < 2 {
-		t.Fatalf("an empty filter gathered only %d candidates; it should not restrict", len(empty))
+	if len(empty) == 0 {
+		t.Fatalf("an empty filter gathered nothing; it must not restrict")
 	}
+	// An explicit empty slice and a nil slice must behave identically. Compare the
+	// set of addresses rather than counts, since ports differ per session.
+	if hostsOf(empty) != hostsOf(all) {
+		t.Fatalf("empty filter changed host coverage: nil gave %v, empty gave %v",
+			hostsOf(all), hostsOf(empty))
+	}
+}
+
+// hostsOf extracts the address from each candidate line, so two sessions on the same
+// machine compare equal despite different ports.
+func hostsOf(cands []string) string {
+	var hosts []string
+	for _, c := range cands {
+		fields := strings.Fields(c)
+		// candidate:<foundation> <component> <proto> <priority> <addr> <port> ...
+		if len(fields) >= 6 {
+			hosts = append(hosts, fields[4])
+		}
+	}
+	sort.Strings(hosts)
+	return strings.Join(hosts, ",")
 }

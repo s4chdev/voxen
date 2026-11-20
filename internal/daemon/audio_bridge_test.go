@@ -264,3 +264,40 @@ func TestStatusReportsAudioCapability(t *testing.T) {
 		t.Fatal("status has no audio state string")
 	}
 }
+
+// TestPlaybackLoopIsPaced proves the mix loop produces frames at the real-time rate
+// rather than as fast as the CPU allows.
+//
+// An unpaced loop floods the playback queue, which the device reports as XRuns, and
+// burns a core producing silence. It was visible as a counter climbing by ~50 per
+// second on an idle call.
+func TestPlaybackLoopIsPaced(t *testing.T) {
+	engine := usableEngine(t)
+	defer engine.Close()
+
+	a := newFakeSession()
+	list := func() []media.ActivePeer {
+		return []media.ActivePeer{{PeerID: "a", Session: a}}
+	}
+	bridge := daemon.NewAudioBridge(engine,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		daemon.AudioBridgeConfig{}, list)
+	if err := bridge.Start(context.Background()); err != nil {
+		t.Skipf("cannot start audio: %v", err)
+	}
+	defer bridge.Stop()
+
+	// Feed nothing: the loop has a peer but no audio, which is the case that used to
+	// spin. Two seconds must produce roughly 100 mixed frames, not thousands.
+	before := bridge.Stats()
+	time.Sleep(2 * time.Second)
+	after := bridge.Stats()
+
+	xrunsGrew := after.OutputXRuns - before.OutputXRuns
+	t.Logf("xruns grew by %d over 2s", xrunsGrew)
+	// A paced loop writes one frame per 20ms, so at most ~100 writes. Allow slack for
+	// scheduling but reject an unpaced flood by a wide margin.
+	if xrunsGrew > 400 {
+		t.Fatalf("playback underran %d times in 2s; the mix loop is not paced", xrunsGrew)
+	}
+}

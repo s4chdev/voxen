@@ -298,22 +298,30 @@ func TestUnverifiedPeerRefused(t *testing.T) {
 		}
 	}
 
-	// The rejection must be explained, not silent.
+	// The peer is held pending rather than rejected outright: the joiner sends its
+	// invite proof immediately after joining, and refusing on the first peer.join
+	// would reject every legitimate joiner. What matters is that it never becomes a
+	// connected session, and that the reason is recorded.
 	var events ipc.RoomEventsResult
 	if err := alice.Call(&ipc.Request{
 		Version: ipc.ProtocolVersion, ID: "events", Method: ipc.MethodRoomEvents,
 	}, &events); err != nil {
 		t.Fatal(err)
 	}
-	found := false
+	explained := false
 	for _, e := range events.Events {
-		if e.Kind == "peer_rejected" && strings.Contains(e.Message, "not verified") {
-			found = true
+		switch e.Kind {
+		case "peer_pending":
+			if strings.Contains(e.Message, "prove the invite code") {
+				explained = true
+			}
+		case "peer_rejected":
+			explained = true
 		}
 	}
-	if !found {
+	if !explained {
 		raw, _ := json.Marshal(events.Events)
-		t.Fatalf("no rejection event explaining why the peer was refused: %s", raw)
+		t.Fatalf("no event explaining why the peer is not connected: %s", raw)
 	}
 }
 

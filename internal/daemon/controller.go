@@ -59,8 +59,11 @@ type Controller struct {
 	// fingerprint. The signaling roster carries a display name too, but it is
 	// server-supplied; this is the one the peer proved it owns.
 	roomMembers map[string]memberInfo
-	identity    *identity.Identity
-	cfg         ControllerConfig
+	// pendingPeers holds participants that joined but have not yet proved the invite
+	// code. Their session starts when the proof arrives.
+	pendingPeers map[string]protocol.PeerInfo
+	identity     *identity.Identity
+	cfg          ControllerConfig
 
 	// events is a bounded ring of recent lifecycle events for "voxen status".
 	events []ipc.RoomEvent
@@ -133,13 +136,14 @@ func NewController(mediaMgr media.Manager, trust PeerResolver, id *identity.Iden
 		cfg.MaxMembers = 5
 	}
 	return &Controller{
-		media:       mediaMgr,
-		trust:       trust,
-		identity:    id,
-		log:         log,
-		cfg:         cfg,
-		sessions:    make(map[string]*peerSession),
-		roomMembers: make(map[string]memberInfo),
+		media:        mediaMgr,
+		trust:        trust,
+		identity:     id,
+		log:          log,
+		cfg:          cfg,
+		sessions:     make(map[string]*peerSession),
+		roomMembers:  make(map[string]memberInfo),
+		pendingPeers: make(map[string]protocol.PeerInfo),
 	}
 }
 
@@ -580,6 +584,13 @@ func (c *Controller) peerKeyFromStatement(stmt *security.SessionStatement, peerI
 	return nil, "", "", fmt.Errorf("identity %s is not verified; run 'voxen verify %s' first", fp.Short(), fp)
 }
 
+// currentClient returns the live signaling client, or nil.
+func (c *Controller) currentClient() *signaling.Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.client
+}
+
 // sendToPeer relays one envelope to a peer over the current signaling client.
 func (c *Controller) sendToPeer(ctx context.Context, peerID, typ string, payload json.RawMessage) {
 	c.mu.Lock()
@@ -597,11 +608,23 @@ func (c *Controller) sendToPeer(ctx context.Context, peerID, typ string, payload
 func (c *Controller) onPeerJoined(ctx context.Context, client *signaling.Client, peer protocol.PeerInfo) {
 	pub, fingerprint, err := c.peerKey(peer)
 	if err != nil {
+		// The peer may be in the middle of proving the invite code. The joiner sends
+		// its acceptance immediately after joining, but the server delivers peer.join
+		// first, so refusing here would reject every joiner before their proof
+		// arrives. Hold the peer instead and start the session when the acceptance
+		// lands.
+		c.mu.Lock()
+		if c.pendingPeers == nil {
+			c.pendingPeers = make(map[string]protocol.PeerInfo)
+		}
+		c.pendingPeers[peer.PeerID] = peer
+		c.mu.Unlock()
+
 		c.recordEvent(ipc.RoomEvent{
-			Kind: "peer_rejected", PeerID: peer.PeerID, DisplayName: peer.DisplayName,
-			Message: err.Error(),
+			Kind: "peer_pending", PeerID: peer.PeerID, DisplayName: peer.DisplayName,
+			Message: "waiting for the participant to prove the invite code",
 		})
-		c.log.Warn("refusing a peer whose identity is not verified",
+		c.log.Debug("peer joined but is not yet authenticated; waiting for its invite proof",
 			"peer", peer.PeerID, "display_name", peer.DisplayName, "reason", err.Error())
 		return
 	}
@@ -1189,6 +1212,22 @@ func (c *Controller) onInviteAcceptance(_ context.Context, env protocol.Envelope
 
 	if err := c.trust.InviteBound(ed25519.PublicKey(pub)); err != nil {
 		c.log.Debug("could not record the joiner's key", "error", err)
+	}
+
+	// If this peer was held back while unauthenticated, start its session now. This
+	// is the other half of the ordering fix in onPeerJoined.
+	c.mu.Lock()
+	held, wasHeld := c.pendingPeers[env.From]
+	delete(c.pendingPeers, env.From)
+	c.mu.Unlock()
+	if wasHeld {
+		c.log.Info("invite proof received; starting the session that was waiting",
+			"peer", env.From, "display_name", held.DisplayName)
+		// Run off the reader goroutine: starting a session negotiates.
+		client := c.currentClient()
+		if client != nil {
+			go c.onPeerJoined(context.Background(), client, held)
+		}
 	}
 
 	// Keep the name the joiner announced so the roster is readable. Without this the

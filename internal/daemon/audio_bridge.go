@@ -52,6 +52,10 @@ type AudioBridge struct {
 	// instead of burning CPU writing silence.
 	activePeers atomic.Int32
 
+	// paceMu guards nextFrame, the wall-clock time the next frame is due.
+	paceMu    sync.Mutex
+	nextFrame time.Time
+
 	// speaking holds the last reported state per peer, so an indicator is only
 	// notified on a transition rather than on every 20 ms frame.
 	speakingMu sync.Mutex
@@ -367,6 +371,45 @@ func (b *AudioBridge) playbackLoop(ctx context.Context, playback audio.PlaybackS
 			}
 			b.log.Debug("playback write failed", "error", err)
 		}
+
+		// Pace to one frame's duration. The loop must produce 50 frames per second, not
+		// as many as the CPU can manage: an unpaced loop floods the playback queue,
+		// which the device reports as XRuns, and spins a core while producing nothing
+		// but silence.
+		b.paceFrame(ctx)
+	}
+}
+
+// paceFrame sleeps for one frame duration, returning early if the bridge stops.
+//
+// It compensates for the time already spent in the loop so the cadence does not drift
+// when a peer read blocks: the target is the wall-clock frame boundary, not "sleep
+// 20ms after whatever we just did".
+func (b *AudioBridge) paceFrame(ctx context.Context) {
+	frame := time.Duration(audio.DefaultFrameDurationMS) * time.Millisecond
+	now := time.Now()
+
+	b.paceMu.Lock()
+	if b.nextFrame.IsZero() {
+		b.nextFrame = now.Add(frame)
+	}
+	// If we have fallen far behind (a stall, or a long block), resynchronise rather
+	// than trying to catch up by spinning.
+	if now.Sub(b.nextFrame) > 4*frame {
+		b.nextFrame = now.Add(frame)
+	}
+	wait := b.nextFrame.Sub(now)
+	b.nextFrame = b.nextFrame.Add(frame)
+	b.paceMu.Unlock()
+
+	if wait <= 0 {
+		return
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
 	}
 }
 

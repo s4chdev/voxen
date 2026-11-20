@@ -79,7 +79,7 @@ filtered session connects over it.
 - **Two-peer encrypted media** — Pion WebRTC, Opus 48 kHz mono, direct SRTP, with
   the peer's Ed25519 identity bound to the DTLS certificate actually negotiated.
   Media is refused until that binding succeeds.
-- **Room orchestration** — `voxen create`, `join`, `leave`, `peers`. The daemon
+- **Room orchestration** — `voxen call`, `join`, `leave`, `peers`. The daemon
   maintains a full mesh: every participant has an independently authenticated
   session with every other one. A verified three-peer mesh is covered by a test
   that drives the real binaries.
@@ -219,7 +219,7 @@ voxen config [--path]            Effective configuration (and "config reload")
 voxen logs [-n N]                Daemon log tail
 voxen doctor                     Diagnostics with actionable hints
 voxen mute | unmute              Microphone state
-voxen create | join | leave      Rooms (phase 4)
+voxen call | join | leave        Rooms (phase 4)
 voxen identity                   Local fingerprint
 voxen verify <fp>                Verify a peer out of band
 voxen trust | revoke <fp>        Inspect or revoke trust

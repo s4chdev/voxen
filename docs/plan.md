@@ -205,7 +205,7 @@ in behind `audio.Engine` without touching the security code.
 
 ## Progress update: room orchestration
 
-The daemon now drives the media mesh that phase 3 built. `voxen create`, `join`,
+The daemon now drives the media mesh that phase 3 built. `voxen call`, `join`,
 `leave` and `peers` work end to end against real binaries.
 
 ### Delivered

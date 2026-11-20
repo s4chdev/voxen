@@ -54,7 +54,7 @@ func TestRenderExplainsNoCall(t *testing.T) {
 	if !strings.Contains(out, "no call") {
 		t.Fatalf("missing no-call state:\n%s", out)
 	}
-	for _, want := range []string{"voxen create", "voxen join"} {
+	for _, want := range []string{"voxen call", "voxen join"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("empty state does not suggest %q:\n%s", want, out)
 		}

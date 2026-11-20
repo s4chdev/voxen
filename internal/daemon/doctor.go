@@ -85,7 +85,7 @@ func (s *Server) doctor(ctx context.Context) ipc.DoctorResult {
 	}
 	add("signaling", signalingStatus,
 		fmt.Sprintf("%s [%s]", s.cfg.Signaling.URL, signalingState),
-		"start a signaling server with 'voxen-signal', then 'voxen create'")
+		"start a signaling server with 'voxen-signal', then 'voxen call'")
 
 	// Audio.
 	//

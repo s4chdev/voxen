@@ -75,12 +75,17 @@ func (a *App) daemonReady(ctx context.Context) bool {
 // runDaemonInProcess runs voxend in the foreground of the current process. The
 // CLI blocks until the daemon stops, which is what "voxen start --foreground"
 // promises: one process, logs on the terminal, Ctrl-C to stop.
+//
+// a.foreground is false when "voxen start" spawned this process detached. In
+// that mode spawnDaemon has already pointed the child's stderr at the log file,
+// so the sink must be file-only; adding os.Stderr as well would write every line
+// twice into the same file.
 func (a *App) runDaemonInProcess(ctx context.Context) error {
 	logPath := a.paths.LogFile
 	if a.cfg.Logging.File != "" {
 		logPath = a.cfg.Logging.File
 	}
-	sink, err := logging.OpenSink(logPath, true)
+	sink, err := logging.OpenSink(logPath, a.foreground)
 	if err != nil {
 		return err
 	}
@@ -92,7 +97,7 @@ func (a *App) runDaemonInProcess(ctx context.Context) error {
 	}
 	srv, err := daemon.New(ctx, daemon.Options{
 		Paths:      a.paths,
-		Foreground: true,
+		Foreground: a.foreground,
 		Logger:     logger,
 	})
 	if err != nil {

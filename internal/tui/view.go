@@ -122,7 +122,7 @@ func (v *ViewModel) body(s Snapshot) string {
 	}
 	if len(s.Peers) == 0 {
 		return subtleStyle(v.NoColor).Render("Waiting for participants to connect…") + "\n\n" +
-			subtleStyle(v.NoColor).Render("Share the room ID. Each participant must verify your fingerprint first.")
+			subtleStyle(v.NoColor).Render("Share the call code. Each participant must verify your fingerprint first.")
 	}
 	return v.peerTable(s)
 }
@@ -134,8 +134,8 @@ func (v *ViewModel) emptyState(s Snapshot) string {
 	b.WriteString(subtleStyle(v.NoColor).Render("Not in a call."))
 	b.WriteString("\n\n")
 	for _, line := range []string{
-		"voxen create        start a call and get a room ID",
-		"voxen join <room>   join an existing call",
+		"voxen call          start a call and get a code to share",
+		"voxen join <code>   join an existing call",
 	} {
 		b.WriteString("  " + line + "\n")
 	}

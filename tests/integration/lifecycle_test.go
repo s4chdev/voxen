@@ -465,7 +465,7 @@ func TestVersionAndHelp(t *testing.T) {
 		t.Fatalf("version should pair the phase number with its name:\n%s", version)
 	}
 	help := e.mustRun("--help")
-	for _, cmd := range []string{"init", "start", "stop", "restart", "create", "join", "leave"} {
+	for _, cmd := range []string{"init", "start", "stop", "restart", "call", "join", "leave"} {
 		if !strings.Contains(help, cmd) {
 			t.Fatalf("help missing %q", cmd)
 		}
@@ -505,5 +505,37 @@ func TestNoSecretsInLogs(t *testing.T) {
 	// The fingerprint is public and must be present, proving the log is real.
 	if !strings.Contains(text, "voxend started") {
 		t.Fatalf("log file does not contain the startup line:\n%s", text)
+	}
+}
+
+// TestBackgroundStartLogsEachLineOnce guards a duplicate-logging regression: the
+// detached daemon started by "voxen start" already has its stderr redirected to
+// the log file, so the log sink must not also tee to stderr. When it did, every
+// record was written twice into the same file.
+func TestBackgroundStartLogsEachLineOnce(t *testing.T) {
+	e := newEnv(t)
+	e.mustRun("init", "--name", "tester")
+	e.mustRun("start")
+	t.Cleanup(func() { _, _, _ = e.run("stop") })
+
+	// "start" returns once the daemon answers, so the startup line is already
+	// written. Give the log a moment to flush on slow hosts.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if raw, err := os.ReadFile(e.logPath()); err == nil && strings.Contains(string(raw), "voxend started") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	raw, err := os.ReadFile(e.logPath())
+	if err != nil {
+		t.Fatalf("read log file: %v", err)
+	}
+	if n := strings.Count(string(raw), "voxend started"); n != 1 {
+		t.Fatalf("startup line written %d times, want 1:\n%s", n, raw)
+	}
+	if n := strings.Count(string(raw), "voxend stopped"); n > 1 {
+		t.Fatalf("shutdown line written %d times, want at most 1:\n%s", n, raw)
 	}
 }

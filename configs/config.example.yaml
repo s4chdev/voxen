@@ -55,6 +55,18 @@ network:
   ice_timeout_ms: 15000
   # Publish candidates via mDNS. Off by default so candidates are explicit.
   enable_mdns: false
+
+  # Restrict ICE to named interfaces. Empty means gather on everything.
+  #
+  # For calls across different networks this is the setting that matters. A private
+  # overlay (Tailscale, WireGuard) already gives both machines addresses on a virtual
+  # LAN; filtering to it means every candidate is on that LAN, so a cross-network call
+  # behaves exactly like a same-LAN call and NAT never enters the picture.
+  #
+  # Run "voxen doctor" to see the interfaces it found; it names the overlay if there
+  # is one. Example:
+  #   interface_filter:
+  #     - tailscale0
   interface_filter: []
 
 daemon:

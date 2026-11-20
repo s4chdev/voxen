@@ -18,6 +18,26 @@ voxen join 265P-DKJV-2AM9
 That is the whole setup. One code, read out or pasted. No fingerprint comparison,
 no room IDs, no accounts.
 
+### Calls between different networks
+
+Same LAN works directly. Across networks it depends on NAT: voxen uses STUN to find a
+public address and connects directly, with no relay. Two ordinary home routers usually
+work; symmetric NAT on both sides does not, and the call says so rather than failing
+silently.
+
+The reliable answer is a private overlay. If both machines are on Tailscale or
+WireGuard, restrict ICE to that interface and a cross-network call becomes a LAN call:
+
+```yaml
+network:
+  interface_filter:
+    - tailscale0
+```
+
+`voxen doctor` detects the interface and tells you this. Verified: filtering to
+`tailscale0` reduces gathered candidates from 6 to 2, both on the overlay, and a
+filtered session connects over it.
+
 > **Build status: calls carry real microphone audio.**
 > Identity, the daemon, the CLI, the security state machines, a self-hosted
 > signaling server, and **real WebRTC sessions with the Ed25519-to-DTLS binding

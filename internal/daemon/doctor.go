@@ -134,6 +134,10 @@ func (s *Server) doctor(ctx context.Context) ipc.DoctorResult {
 			"")
 	}
 
+	// Network: which interfaces can carry media, and whether a private overlay is
+	// available. This is the check that predicts whether a cross-network call works.
+	checks = append(checks, s.networkCheck(ctx)...)
+
 	// Clock: signed statements depend on reasonable time synchronisation.
 	add("clock", "pass", time.Now().UTC().Format(time.RFC3339)+" (UTC)", "")
 

@@ -36,6 +36,8 @@ type ManagerConfig struct {
 	// STUNServers come from local configuration only. A signaling server cannot
 	// inject one.
 	STUNServers []string
+	// InterfaceFilter restricts ICE to named interfaces, for private overlays.
+	InterfaceFilter []string
 	// ConnectTimeout bounds how long a session waits for a direct path.
 	ConnectTimeout time.Duration
 
@@ -99,6 +101,7 @@ func (m *WebRTCManager) NewSession(ctx context.Context, spec SessionSpec) (Sessi
 		ExpectedPeerKey: pub,
 		Parameters:      m.cfg.Parameters,
 		STUNServers:     m.cfg.STUNServers,
+		InterfaceFilter: m.cfg.InterfaceFilter,
 		ConnectTimeout:  m.cfg.ConnectTimeout,
 		StatementTTL:    m.cfg.StatementTTL,
 		ReplayGuard:     m.replay,

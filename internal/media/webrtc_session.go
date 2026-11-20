@@ -50,6 +50,16 @@ type SessionConfig struct {
 	// never relays media.
 	STUNServers []string
 
+	// InterfaceFilter restricts ICE to interfaces whose name matches. An empty list
+	// means every interface is used.
+	//
+	// This is what makes a private overlay like Tailscale work predictably: gathering
+	// on tailscale0 alone means every candidate is already on the virtual LAN, so a
+	// cross-network call becomes a same-LAN call and never depends on NAT traversal.
+	// It also stops ICE advertising addresses the peer has no route to, which shortens
+	// candidate checks and avoids leaking LAN addresses to a remote peer.
+	InterfaceFilter []string
+
 	// ConnectTimeout bounds how long to wait for a usable direct path before
 	// reporting failure. Zero uses DefaultConnectTimeout.
 	ConnectTimeout time.Duration
@@ -178,6 +188,17 @@ func NewWebRTCSession(ctx context.Context, cfg SessionConfig) (*WebRTCSession, e
 	se := webrtc.SettingEngine{}
 	// mDNS candidates are off by default so candidates are explicit and testable.
 	se.SetICEMulticastDNSMode(0)
+	// Restrict gathering when the operator named interfaces.
+	if len(cfg.InterfaceFilter) > 0 {
+		allowed := make(map[string]struct{}, len(cfg.InterfaceFilter))
+		for _, name := range cfg.InterfaceFilter {
+			allowed[name] = struct{}{}
+		}
+		se.SetInterfaceFilter(func(name string) bool {
+			_, keep := allowed[name]
+			return keep
+		})
+	}
 	// Let the daemon own teardown. By default Pion closes the PeerConnection from
 	// inside its DTLS goroutine when the peer sends close-notify, which races any
 	// concurrent GetStats call and makes shutdown ordering unpredictable. With

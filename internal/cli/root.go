@@ -169,6 +169,9 @@ relays audio: if two peers cannot connect directly, the call fails and says so.`
 		a.newDaemonCommand(),
 		a.newServiceCommand(),
 		a.newTUICommand(),
+		a.newInstallCommand(),
+		a.newUninstallCommand(),
+		a.newUpdateCommand(),
 	)
 	return root
 }

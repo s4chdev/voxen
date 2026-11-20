@@ -151,12 +151,46 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 
 # Every directory the daemon writes must be listed, or writes fail inside the
-# namespace created by ProtectHome.
-ReadWritePaths=%h/.config/voxen %h/.local/state/voxen %t/voxen
+# namespace created by ProtectHome. These are generated from the profile the installer
+# was pointed at, not hardcoded: a profile selected through VOXEN_* can live anywhere,
+# and a hardcoded list made the unit fail to start with "No such file or directory"
+# for every non-default profile.
+ReadWritePaths=` + strings.Join(rwPaths(opts), " ") + `
 
 [Install]
 WantedBy=default.target
 `
+}
+
+// rwPaths returns the directories the daemon writes, for the unit's sandbox.
+//
+// The runtime directory is always included: ProtectHome makes /run/user/$UID read-only
+// inside the namespace, so omitting it breaks socket creation.
+func rwPaths(opts Options) []string {
+	var out []string
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		for _, existing := range out {
+			if existing == p {
+				return
+			}
+		}
+		out = append(out, p)
+	}
+	// %t is the systemd specifier for the runtime directory; using it keeps the unit
+	// portable rather than embedding one machine's path.
+	add("%t/voxen")
+	add(opts.ConfigDir)
+	add(opts.StateDir)
+	if opts.ConfigDir == "" && opts.StateDir == "" {
+		// No profile given: fall back to the conventional layout so a unit written by
+		// an older caller still works.
+		add("%h/.config/voxen")
+		add("%h/.local/state/voxen")
+	}
+	return out
 }
 
 // ensureInstallDirs creates the directories the unit lists in ReadWritePaths.
@@ -164,17 +198,16 @@ WantedBy=default.target
 // systemd refuses to start a unit whose ReadWritePaths do not exist, and it would
 // create them with its own (umask-derived) modes. Creating them through voxen
 // keeps them private.
-func ensureInstallDirs(configPath, runtimeDir string) error {
+func ensureInstallDirs(configPath, stateDir string) error {
 	if configPath == "" {
 		return errors.New("service: config path is required")
 	}
 	configDir := filepath.Dir(configPath)
-	dirs := []string{
-		configDir,
-		filepath.Join(filepath.Dir(configDir), "state"),
-	}
-	if runtimeDir != "" {
-		dirs = append(dirs, runtimeDir)
+	dirs := []string{configDir}
+	if stateDir != "" {
+		dirs = append(dirs, stateDir)
+	} else {
+		dirs = append(dirs, filepath.Join(filepath.Dir(configDir), "state"))
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o700); err != nil {

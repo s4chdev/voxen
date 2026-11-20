@@ -1,0 +1,173 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to label the build (for example 0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # Audio needs cgo, and cross-compiling cgo needs a per-target C toolchain. Rather
+  # than ship silent "-nocgo" binaries, each platform builds natively on its own
+  # runner. That is the only way a release artifact can be said to have working audio.
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            suffix: linux-amd64
+          - os: ubuntu-24.04-arm
+            suffix: linux-arm64
+          - os: macos-13
+            suffix: darwin-amd64
+          - os: macos-latest
+            suffix: darwin-arm64
+          - os: windows-latest
+            suffix: windows-amd64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: install audio build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libspeexdsp-dev
+
+      - name: derive version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - name: build
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          VERSION: ${{ steps.ver.outputs.version }}
+          COMMIT: ${{ steps.ver.outputs.commit }}
+          BUILD_DATE: ${{ steps.ver.outputs.date }}
+          SUFFIX: ${{ matrix.suffix }}
+        run: |
+          set -eu
+          ext=""
+          case "$SUFFIX" in windows-*) ext=".exe" ;; esac
+          stage="dist/voxen-${VERSION}-${SUFFIX}"
+          mkdir -p "$stage"
+          ldflags="-s -w \
+            -X github.com/s4chdev/voxen/internal/version.Version=${VERSION} \
+            -X github.com/s4chdev/voxen/internal/version.Commit=${COMMIT} \
+            -X github.com/s4chdev/voxen/internal/version.BuildDate=${BUILD_DATE}"
+          go build -trimpath -tags speex -ldflags "$ldflags" -o "$stage/voxen$ext" ./cmd/voxen
+          go build -trimpath -tags speex -ldflags "$ldflags" -o "$stage/voxend$ext" ./cmd/voxend
+          go build -trimpath -tags speex -ldflags "$ldflags" -o "$stage/voxen-signal$ext" ./cmd/voxen-signal
+          cp README.md LICENSE docs/security.md docs/protocol.md docs/architecture.md "$stage"/
+          cp configs/config.example.yaml "$stage"/
+          cp scripts/install.sh "$stage"/ 2>/dev/null || true
+
+      - name: smoke test the built binaries
+        shell: bash
+        env:
+          SUFFIX: ${{ matrix.suffix }}
+        run: |
+          set -eu
+          ext=""
+          case "$SUFFIX" in windows-*) ext=".exe" ;; esac
+          stage=$(ls -d dist/voxen-*)
+          "$stage/voxen$ext" version
+          "$stage/voxend$ext" --version
+          "$stage/voxen-signal$ext" --version
+
+      - name: package
+        shell: bash
+        env:
+          SUFFIX: ${{ matrix.suffix }}
+        run: |
+          set -eu
+          stage=$(ls -d dist/voxen-*)
+          base=$(basename "$stage")
+          (cd dist && tar -czf "$base.tar.gz" "$base")
+          (cd dist && sha256sum "$base.tar.gz" > "$base.tar.gz.sha256")
+          rm -rf "$stage"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.suffix }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          retention-days: 7
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+
+      - name: list artifacts
+        run: ls -la dist/
+
+      - name: attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            **Linux / macOS**
+
+            ```sh
+            tar -xzf voxen-<version>-<os>-<arch>.tar.gz
+            cd voxen-<version>-<os>-<arch>
+            ./install.sh          # per-user; add sudo for a system install
+            voxen init --name <you>
+            ```
+
+            **Windows (PowerShell)**
+
+            ```powershell
+            Expand-Archive voxen-<version>-windows-amd64.tar.gz
+            cd voxen-<version>-windows-amd64
+            .\voxen.exe install
+            .\voxen.exe init --name <you>
+            ```
+
+            Then call someone:
+
+            ```
+            voxen call          # prints a code
+            voxen join <code>
+            ```
+
+            These binaries include echo cancellation and noise suppression (built with
+            SpeexDSP). Each archive is built on its own platform runner, so the audio
+            backend matches the platform rather than being cross-compiled.
+
+            Verify the download with the accompanying `.sha256` file:
+            `sha256sum -c voxen-<version>-<os>-<arch>.tar.gz.sha256`

@@ -115,12 +115,17 @@ dist:
 			-ldflags '$(LDFLAGS)' -o $$stage/voxend$$ext ./cmd/voxend; \
 		GOOS=$$os GOARCH=$$arch CGO_ENABLED=$$cgo $(GO) build $(GOFLAGS) \
 			-ldflags '$(LDFLAGS)' -o $$stage/voxen-signal$$ext ./cmd/voxen-signal; \
-		cp README.md LICENSE docs/security.md docs/protocol.md configs/config.example.yaml $$stage/ 2>/dev/null || true; \
-		(cd $(DIST_DIR) && tar -czf $$(basename $$stage).tar.gz $$(basename $$stage)) ; \
+		cp README.md LICENSE docs/security.md docs/protocol.md docs/architecture.md configs/config.example.yaml $$stage/ 2>/dev/null || true; \
+		cp scripts/install.sh $$stage/ 2>/dev/null || true; \
+		(cd $(DIST_DIR) && tar -czf $$(basename $$stage).tar.gz $$(basename $$stage) && \
+		 sha256sum $$(basename $$stage).tar.gz >> $$(basename $$stage).tar.gz.sha256) ; \
 		rm -rf $$stage; \
 	done
 	@echo "artifacts in $(DIST_DIR)/"
-	@echo "note: archives built without a native C toolchain are named -nocgo and have no audio"
+	@echo
+	@echo "Archives built without a native C toolchain are named -nocgo and have no audio."
+	@echo "Each platform builds audio-capable binaries in CI on its own runner; see the"
+	@echo "release workflow for the shipping artifacts."
 
 ## install: install into $GOBIN (or $(HOME)/go/bin)
 install:

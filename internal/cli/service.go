@@ -73,7 +73,14 @@ func (a *App) serviceOptions() (service.Options, error) {
 		"VOXEN_STATE_DIR=" + a.paths.StateDir,
 		"VOXEN_RUNTIME_DIR=" + a.paths.RuntimeDir,
 	}
-	return service.Options{Binary: binary, Config: a.paths.ConfigFile, Env: env}, nil
+	return service.Options{
+		Binary:     binary,
+		Config:     a.paths.ConfigFile,
+		Env:        env,
+		ConfigDir:  a.paths.ConfigDir,
+		StateDir:   a.paths.StateDir,
+		RuntimeDir: a.paths.RuntimeDir,
+	}, nil
 }
 
 func (a *App) newServiceInstallCommand() *cobra.Command {

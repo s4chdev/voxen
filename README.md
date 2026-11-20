@@ -101,74 +101,52 @@ filtered session connects over it.
 
 ---
 
+## Install
+
+**From a release archive** (no package manager needed):
+
+```sh
+tar -xzf voxen-<version>-<os>-<arch>.tar.gz
+cd voxen-<version>-<os>-<arch>
+./install.sh              # per-user, no root needed
+voxen init --name you
+```
+
+`sudo ./install.sh` installs system-wide to `/usr/local/bin`. On Windows, extract and
+run `.\voxen.exe install`.
+
+**From source:**
+
+```sh
+make build                # bin/voxen, bin/voxend, bin/voxen-signal
+./bin/voxen install --prefix ~/.local
+```
+
+The installer copies the binaries into one directory (the daemon must sit beside the
+CLI), prints exactly which files it wrote, and tells you the one line to add to PATH
+if needed. It never edits your shell profile.
+
+| Command | What it does |
+|---|---|
+| `voxen install [--prefix P] [--service]` | Install binaries, optionally the supervisor too |
+| `voxen uninstall` | Remove binaries; **keeps your identity and config** |
+| `voxen uninstall --purge` | Also remove identity and config (asks first) |
+| `voxen update` | Reports the installed version and how to upgrade |
+| `voxen service install` | Supervisor only (systemd / launchd / Task Scheduler) |
+
+Upgrading is `./install.sh --force`: binaries are replaced atomically, config and
+identity untouched, so peers keep trusting you.
+
 ## Requirements
 
-- Go 1.25 or newer (the repo builds with 1.27).
-- A C toolchain, because the audio backend is cgo: `gcc` on Linux (plus
-  `libasound2-dev`), the Xcode command line tools on macOS, and MinGW-w64 or
-  LLVM/clang on Windows.
+- Go 1.25 or newer, to build. A C toolchain for the default audio build: `gcc` and
+  `libasound2-dev` on Linux, Xcode command line tools on macOS, MinGW-w64 or
+  clang on Windows.
 - Opus is pure Go, so no `libopus` install is needed.
-- Echo cancellation and noise suppression need `libspeexdsp-dev` **and** a build with
-  `-tags speex` (`make build-speex`). The default build reports them as unavailable
-  rather than pretending.
-- Building with `CGO_ENABLED=0` still works; audio is then reported as
-  unavailable instead of silently producing no sound.
-
-## Build
-
-```sh
-make build          # bin/voxen and bin/voxend
-make test           # unit + integration + security suites
-make test-race      # everything under the race detector
-make cross          # verify all six platform targets compile
-make dist           # release archives in dist/
-```
-
-Without `make`:
-
-```sh
-go build -trimpath -o bin/voxen ./cmd/voxen
-go build -trimpath -o bin/voxend ./cmd/voxend
-go test ./...
-```
-
-### Platform build notes
-
-**Linux**
-
-```sh
-make build
-./bin/voxen init --name "$USER"
-```
-
-Configuration lives in `~/.config/voxen`, state and logs in
-`~/.local/state/voxen`, and the socket in `$XDG_RUNTIME_DIR/voxen`.
-
-**macOS**
-
-```sh
-make build
-./bin/voxen init --name "$USER"
-```
-
-Configuration lives in `~/Library/Application Support/voxen` and logs in
-`~/Library/Logs/voxen`. Fingerprint and IPC behaviour is identical to Linux. The
-microphone permission prompt arrives with the phase 2 audio backend and the
-bundle `Info.plist` (`NSMicrophoneUsageDescription`).
-
-**Windows (PowerShell)**
-
-```powershell
-go build -trimpath -o bin\voxen.exe .\cmd\voxen
-go build -trimpath -o bin\voxend.exe .\cmd\voxend
-.\bin\voxen.exe init --name $env:USERNAME
-.\bin\voxen.exe start
-```
-
-Configuration lives in `%APPDATA%\voxen`; logs in `%LOCALAPPDATA%\voxen\logs`.
-The daemon endpoint is a named pipe named after the profile, restricted by a
-security descriptor to your account, SYSTEM and Administrators. `voxen start`
-detaches the daemon into its own process group with no console window.
+- Echo cancellation and noise suppression are included in release binaries. Building
+  them yourself needs `libspeexdsp-dev` and `-tags speex` (`make build-speex`); without
+  that the features report as unavailable rather than pretending.
+- `CGO_ENABLED=0` builds still work, with audio reported unavailable.
 
 ## Quick start
 

@@ -45,6 +45,13 @@ type Options struct {
 	Env []string
 	// LogPath is used by supervisors that capture output to a file.
 	LogPath string
+	// ConfigDir and StateDir are the profile directories the daemon writes. They must
+	// be listed in the unit's writable paths, and they are not always the default
+	// locations: a profile selected through VOXEN_* variables can live anywhere.
+	ConfigDir string
+	StateDir  string
+	// RuntimeDir is the directory holding the IPC socket.
+	RuntimeDir string
 }
 
 // envLines renders environment assignments, dropping anything malformed.

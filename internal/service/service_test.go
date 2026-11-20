@@ -175,3 +175,50 @@ func TestInstallPreparesDirectories(t *testing.T) {
 		t.Fatalf("config directory mode = %04o, want 0700", info.Mode().Perm())
 	}
 }
+
+// TestUnitUsesTheActualProfilePaths is the regression test for a unit that failed to
+// start for every non-default profile.
+//
+// ReadWritePaths used to hardcode %h/.config/voxen, which does not exist when a profile
+// lives elsewhere, so systemd refused to build the mount namespace:
+// "Failed to set up mount namespacing: ... No such file or directory".
+func TestUnitUsesTheActualProfilePaths(t *testing.T) {
+	m := &systemdManager{}
+	unit := m.render(Options{
+		Binary:     "/opt/voxen/voxend",
+		Config:     "/srv/profiles/a/config/config.yaml",
+		ConfigDir:  "/srv/profiles/a/config",
+		StateDir:   "/srv/profiles/a/state",
+		RuntimeDir: "/srv/profiles/a/run",
+		Env:        []string{"VOXEN_CONFIG_DIR=/srv/profiles/a/config"},
+	})
+
+	if !strings.Contains(unit, "/srv/profiles/a/config") {
+		t.Fatal("the config directory is not in ReadWritePaths")
+	}
+	if !strings.Contains(unit, "/srv/profiles/a/state") {
+		t.Fatal("the state directory is not in ReadWritePaths")
+	}
+	if strings.Contains(unit, "%h/.config/voxen") {
+		t.Fatal("the unit still hardcodes the default config path; it will fail for any other profile")
+	}
+	// The runtime directory must always be writable, since ProtectHome makes
+	// /run/user read-only inside the namespace.
+	if !strings.Contains(unit, "%t/voxen") {
+		t.Fatal("the runtime directory is missing from ReadWritePaths")
+	}
+	// The profile must be baked in, or the supervisor and the CLI disagree on paths.
+	if !strings.Contains(unit, `Environment="VOXEN_CONFIG_DIR=/srv/profiles/a/config"`) {
+		t.Fatal("the profile environment is not in the unit")
+	}
+}
+
+// TestUnitFallsBackToDefaults proves a caller that supplies no profile still gets a
+// working unit, rather than an empty ReadWritePaths.
+func TestUnitFallsBackToDefaults(t *testing.T) {
+	m := &systemdManager{}
+	unit := m.render(Options{Binary: "/opt/voxen/voxend", Config: "/home/u/.config/voxen/config.yaml"})
+	if !strings.Contains(unit, "%h/.config/voxen") {
+		t.Fatal("no profile given, but the conventional path is missing")
+	}
+}

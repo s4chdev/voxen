@@ -472,3 +472,68 @@ environment because piped stdin is not delivered as Bubble Tea key events. Key
 handling is covered by unit tests driving `tea.KeyMsg` directly, which tests the same
 code path Bubble Tea calls, but a human has not yet pressed the keys in a real
 terminal.
+
+---
+
+## Progress update: echo cancellation and noise suppression (phase 8, opt-in build)
+
+Implemented as an **opt-in build variant**, because it is the one dependency that does
+not belong in the default build.
+
+### Why opt-in
+
+Echo cancellation needs SpeexDSP, which is cgo plus a system header. Making it a
+default dependency would break the dependency-free `CGO_ENABLED=0` cross-build that
+`make cross` and CI rely on for six targets. So:
+
+- Default build: no preprocessing, and `audio.echo_cancellation: true` is a
+  configuration error that explains how to get it.
+- `-tags speex` (`make build-speex`): real echo cancellation and noise suppression.
+
+Reporting is honest in both cases: `voxen status` shows a `processing` line naming
+what is actually running, and `voxen doctor` has an `audio-processing` check that
+distinguishes "not compiled in", "compiled but disabled", and "active".
+
+### Measured, not assumed
+
+The significant finding is that SpeexDSP offers two ways to cancel echo and they
+differ by an order of magnitude:
+
+| Route | Cancellation on a simulated echo path |
+|---|---|
+| `speex_echo_cancellation` directly | **68 dB** |
+| canceller via `speex_preprocess`'s echo state | 15 dB |
+
+Both run without error and both "work" by any smoke test. The weaker path would have
+shipped unnoticed, and the symptom - "echo cancellation is on but I can still hear
+myself" - is exactly the kind of thing a user cannot debug. The direct path is used,
+and `TestEchoCancellationRemovesSimulatedEcho` asserts at least 20 dB so a regression
+to the weaker behaviour fails the build.
+
+A second silent trap is recorded in the code: calling `ec.Playback` for the reference
+*and* letting the preprocessor feed it corrupts the adaptive filter, dropping
+cancellation to 15 dB with no error. The reference is now supplied exactly once, per
+call, to `Cancellation`.
+
+### Integration
+
+The playback loop records the frame it is sending to the speaker as the far-end
+reference; the capture loop supplies that reference to the canceller and filters the
+microphone frame before encoding. Without this wiring the processor would run and do
+nothing, which `TestBridgeReferenceReachesProcessor` guards against.
+
+### Bugs found while wiring it
+
+- A re-entrant lock in `Start`: the processor was built while the bridge mutex was
+  already held, deadlocking the first `Start`. Second re-entrant deadlock in this
+  file, which is a sign the locking deserves a cleanup pass.
+- `PushReference` early-returned when only echo cancellation was enabled, so the
+  reference never arrived and cancellation was inert.
+
+### Not verified on real hardware
+
+The 68 dB figure is from a simulated acoustic path: a tone played, attenuated and
+delayed one frame. Real echo paths have delay, reverb and nonlinearity, and a real
+speaker-to-microphone loop will cancel less. **Nobody has yet made a speaker-based
+call with a microphone open and confirmed their own voice is inaudible.** That is the
+test that matters, and it needs a person and a room.

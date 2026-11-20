@@ -20,6 +20,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/s4chdev/voxen/internal/dsp"
 	"github.com/s4chdev/voxen/internal/paths"
 )
 
@@ -335,11 +336,15 @@ func (c Config) Validate() error {
 	if c.Audio.Bitrate < MinBitrate || c.Audio.Bitrate > MaxBitrate {
 		add("audio.bitrate_bps: must be between %d and %d", MinBitrate, MaxBitrate)
 	}
-	if c.Audio.EchoCancellation {
-		add("audio.echo_cancellation: not implemented yet; declaring it true would claim echo cancellation voxen does not perform")
+	// Echo cancellation and noise suppression need a build that includes the
+	// SpeexDSP backend. Accepting the flags on a build without it would promise
+	// processing that cannot happen, so the configuration is refused with an
+	// explanation rather than silently ignored.
+	if c.Audio.EchoCancellation && !dsp.Available() {
+		add("audio.echo_cancellation: this build has no audio preprocessing backend; rebuild with -tags speex (requires libspeexdsp-dev)")
 	}
-	if c.Audio.NoiseSuppression {
-		add("audio.noise_suppression: not implemented yet; declaring it true would claim suppression voxen does not perform")
+	if c.Audio.NoiseSuppression && !dsp.Available() {
+		add("audio.noise_suppression: this build has no audio preprocessing backend; rebuild with -tags speex (requires libspeexdsp-dev)")
 	}
 	if c.Audio.InputGainPercent < 0 || c.Audio.InputGainPercent > 200 {
 		add("audio.input_gain_percent: must be between 0 and 200")

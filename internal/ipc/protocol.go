@@ -218,6 +218,12 @@ type AudioStatus struct {
 	OutputXRuns    uint64 `json:"output_xruns"`
 	InputDevice    string `json:"input_device,omitempty"`
 	OutputDevice   string `json:"output_device,omitempty"`
+	// EchoCancellation and NoiseSuppression report what is actually running, not
+	// what was requested: a build without the backend must not imply otherwise.
+	EchoCancellation bool `json:"echo_cancellation"`
+	NoiseSuppression bool `json:"noise_suppression"`
+	// DSPBackend names the preprocessing implementation, or "none".
+	DSPBackend string `json:"dsp_backend,omitempty"`
 }
 
 // Capabilities is the honest feature matrix of the running build.

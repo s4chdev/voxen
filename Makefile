@@ -146,6 +146,26 @@ deps:
 	@echo
 	@echo "Opus is pure Go (github.com/thesyncim/gopus): no libopus needed."
 	@echo "Building with CGO_ENABLED=0 still works; audio is then unavailable."
+	@echo
+	@echo "Echo cancellation / noise suppression is opt-in and needs SpeexDSP:"
+	@echo "  Linux:   apt-get install libspeexdsp-dev, then 'make build-speex'"
+	@echo "  macOS:   brew install speexdsp, then 'make build-speex'"
+	@echo "  Windows: build libspeexdsp or use MSYS2's mingw-w64-speexdsp"
+	@echo "  Without it, voxen reports these features as unavailable."
+
+## build-speex: build with echo cancellation and noise suppression
+#
+# Opt-in on purpose: the default build has no cgo preprocessing dependency so it
+# stays cross-compilable, and a build that cannot cancel echo must not imply it can.
+build-speex:
+	@mkdir -p $(BIN_DIR)
+	$(GO) build $(GOFLAGS) -tags speex -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/voxen ./cmd/voxen
+	$(GO) build $(GOFLAGS) -tags speex -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/voxend ./cmd/voxend
+	$(GO) build $(GOFLAGS) -tags speex -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/voxen-signal ./cmd/voxen-signal
+
+## test-speex: run the preprocessing tests, which need the backend
+test-speex:
+	$(GO) test -tags speex ./internal/dsp/ ./internal/daemon/
 
 ## check: what CI runs for a pull request
 check: lint vet test-race cross

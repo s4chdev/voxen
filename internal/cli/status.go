@@ -81,6 +81,20 @@ func printStatus(a *App, s ipc.StatusResult) {
 			mic = "muted"
 		}
 		t.add("call audio", fmt.Sprintf("%s, sent %d frames, received %d", mic, s.Audio.FramesSent, s.Audio.FramesReceived))
+		// Report preprocessing as it is, not as requested: "off" here means the
+		// audio is raw, which matters to someone hearing their own echo.
+		stages := "none"
+		var active []string
+		if s.Audio.EchoCancellation {
+			active = append(active, "echo cancellation")
+		}
+		if s.Audio.NoiseSuppression {
+			active = append(active, "noise suppression")
+		}
+		if len(active) > 0 {
+			stages = fmt.Sprintf("%s (%s)", strings.Join(active, ", "), s.Audio.DSPBackend)
+		}
+		t.add("processing", stages)
 		if s.Audio.InputDropped > 0 || s.Audio.OutputXRuns > 0 {
 			t.add("audio health", fmt.Sprintf("input dropped %d, output xruns %d", s.Audio.InputDropped, s.Audio.OutputXRuns))
 		}

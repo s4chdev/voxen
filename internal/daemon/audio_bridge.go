@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/s4chdev/voxen/internal/audio"
+	"github.com/s4chdev/voxen/internal/dsp"
 	"github.com/s4chdev/voxen/internal/media"
 )
 
@@ -58,6 +59,17 @@ type AudioBridge struct {
 	// mutedPeers is the local per-peer mute set.
 	mutedPeers map[string]bool
 
+	// dspProcessor filters microphone audio before it is encoded. It is a no-op
+	// unless a backend is compiled in and the user enabled a stage.
+	dspProcessor dsp.Processor
+	// lastPlayed is the most recent speaker frame, used as the far-end reference
+	// for echo cancellation. It is guarded by refMu because the playback loop writes
+	// it while the capture loop reads it.
+	refMu      sync.Mutex
+	lastPlayed []int16
+	// stages is what the processor is actually doing, for status reporting.
+	stages dsp.ActiveStages
+
 	framesSent     atomic.Uint64
 	framesReceived atomic.Uint64
 	framesMixed    atomic.Uint64
@@ -76,6 +88,10 @@ type AudioBridgeConfig struct {
 	OutputDevice string
 	// Muted starts the microphone disabled.
 	Muted bool
+	// EchoCancellation and NoiseSuppression enable preprocessing of the microphone
+	// signal. They only take effect when a backend is compiled in.
+	EchoCancellation bool
+	NoiseSuppression bool
 }
 
 // NewAudioBridge builds a bridge over the given engine.
@@ -151,6 +167,28 @@ func (b *AudioBridge) Start(ctx context.Context) error {
 		_ = playback.Close()
 		return audio.ErrStreamGone
 	}
+	// The preprocessing stage is built before taking the lock: construction touches
+	// no bridge state, and creating it under the mutex previously deadlocked because
+	// this function already held it.
+	proc, procErr := dsp.New(dsp.Config{
+		EchoCancellation: b.cfg.EchoCancellation,
+		NoiseSuppression: b.cfg.NoiseSuppression,
+	})
+	if procErr != nil {
+		// A processor that cannot be built must not fail the call: the call is
+		// usable without it, and refusing to start audio over it would be worse.
+		b.log.Warn("audio preprocessing unavailable; continuing without it", "error", procErr)
+		proc = dsp.None{}
+	}
+	b.dspProcessor = proc
+	b.stages = proc.Active()
+	if proc.Active().Backend != "none" {
+		b.log.Info("audio preprocessing active",
+			"backend", proc.Active().Backend,
+			"echo_cancellation", proc.Active().EchoCancellation,
+			"noise_suppression", proc.Active().NoiseSuppression)
+	}
+
 	b.capture = capture
 	b.playback = playback
 	runCtx, runCancel := context.WithCancel(context.Background())
@@ -213,7 +251,16 @@ func (b *AudioBridge) captureLoop(ctx context.Context, capture audio.CaptureStre
 
 		b.mu.Lock()
 		muted := b.muted
+		proc := b.dspProcessor
 		b.mu.Unlock()
+
+		// Preprocess before anything else: echo cancellation needs the reference
+		// that is currently playing, and muting must not skip the stage or the
+		// canceller's adaptation would stall every time someone muted.
+		if proc != nil {
+			proc.PushReference(b.referenceFrame())
+			proc.Process(pcm)
+		}
 
 		peers := b.peers()
 		if muted {
@@ -309,6 +356,10 @@ func (b *AudioBridge) playbackLoop(ctx context.Context, playback audio.PlaybackS
 			}
 			b.framesMixed.Add(1)
 		}
+
+		// Record what is being played: this is the far-end signal the canceller
+		// needs to model the echo path.
+		b.setReferenceFrame(out)
 
 		if err := playback.WriteFrames(ctx, out); err != nil {
 			if ctx.Err() != nil {
@@ -406,6 +457,11 @@ func (b *AudioBridge) Stop() {
 	}
 	if playback != nil {
 		_ = playback.Close()
+	}
+
+	// Release the processor after the loops stop, so no loop is mid-Run.
+	if proc := b.takeProcessor(); proc != nil {
+		_ = proc.Close()
 	}
 
 	// Wait for the loops, but never forever. A wedged driver must not prevent the
@@ -521,3 +577,48 @@ func isSpeech(frame []int16) bool {
 // IsSpeechForTest exposes the speech gate to tests in the external test package.
 // It carries no logic of its own; the production path calls isSpeech directly.
 func IsSpeechForTest(frame []int16) bool { return isSpeech(frame) }
+
+// referenceFrame returns a copy of the most recent playback frame.
+//
+// A copy is essential: the caller hands it to an adaptive filter that reads it
+// multiple times, and the playback loop overwrites its own buffer every 20 ms.
+func (b *AudioBridge) referenceFrame() []int16 {
+	b.refMu.Lock()
+	defer b.refMu.Unlock()
+	if b.lastPlayed == nil {
+		return make([]int16, audio.FramesPerPacket)
+	}
+	out := make([]int16, len(b.lastPlayed))
+	copy(out, b.lastPlayed)
+	return out
+}
+
+// setReferenceFrame records the frame currently being played.
+func (b *AudioBridge) setReferenceFrame(frame []int16) {
+	b.refMu.Lock()
+	defer b.refMu.Unlock()
+	if b.lastPlayed == nil || len(b.lastPlayed) != len(frame) {
+		b.lastPlayed = make([]int16, len(frame))
+	}
+	copy(b.lastPlayed, frame)
+}
+
+// takeProcessor removes and returns the processor for cleanup.
+func (b *AudioBridge) takeProcessor() dsp.Processor {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	proc := b.dspProcessor
+	b.dspProcessor = nil
+	return proc
+}
+
+// Stages reports which preprocessing is actually running.
+func (b *AudioBridge) Stages() dsp.ActiveStages {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.stages
+}
+
+// ReferenceForTest exposes the current far-end reference buffer to tests in the
+// external test package. It carries no logic of its own.
+func (b *AudioBridge) ReferenceForTest() []int16 { return b.referenceFrame() }

@@ -24,6 +24,25 @@ listing modules the binary does not actually use. `github.com/gorilla/websocket`
 was evaluated and is committed to for phase 4, but is intentionally **not** a
 dependency yet: it will be added in the change that first imports it.
 
+### Optional: audio preprocessing
+
+Speech preprocessing is an **opt-in build variant**, not a default dependency:
+
+| Component | Licence | When |
+|---|---|---|
+| `libspeexdsp` (via `github.com/kechako/go-speexdsp`, MIT) | BSD-3-Clause cgo binding over Xiph's BSD-licensed SpeexDSP | Only with `-tags speex` |
+
+SpeexDSP provides both echo cancellation and noise suppression. It is deliberately
+not a default because it is a cgo dependency with a system header requirement, which
+would break the dependency-free `CGO_ENABLED=0` cross-build that `make cross` relies
+on. The default build reports both features as unavailable rather than silently
+omitting them.
+
+An important measured detail is recorded in `internal/dsp/speex.go`: SpeexDSP's
+`speex_echo_cancellation` achieves roughly 68 dB of echo attenuation on a simulated
+path, while routing the canceller through the preprocessor's echo state achieves
+about 15 dB. The former is used.
+
 ### Why four TUI libraries rather than one
 
 They are separate concerns maintained by the same project: Bubble Tea owns the event

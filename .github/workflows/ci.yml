@@ -103,6 +103,29 @@ jobs:
           CGO_ENABLED: "1"
         run: go test -v -timeout 15m ./tests/integration/...
 
+  # Echo cancellation and noise suppression are an opt-in build variant because
+  # they need SpeexDSP. They must still be compiled and tested somewhere, or the
+  # variant would rot silently while the default build stayed green.
+  speex-variant:
+    name: preprocessing variant (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libspeexdsp-dev
+      - name: build with the speex tag
+        env:
+          CGO_ENABLED: "1"
+        run: go build -tags speex ./...
+      - name: preprocessing tests
+        env:
+          CGO_ENABLED: "1"
+        run: go test -tags speex -race ./internal/dsp/ ./internal/daemon/
+
   # Prove the whole tree compiles for six targets, including the Windows and
   # macOS-specific files that are never exercised on a Linux runner.
   cross-build:

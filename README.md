@@ -68,7 +68,7 @@ voxen create
 | Speaking indicators, per-peer mute | 6 |
 | Explicit admission and removal (`admit` / `remove`) | 6 |
 | launchd and Windows supervision verified on real hardware | needs a run on those hosts |
-| Echo cancellation and noise suppression (config rejects the flags until then) | 8 |
+| Echo cancellation and noise suppression verified on real hardware | needs a run with speakers and a mic |
 | Windows/macOS audio verified on real hardware | needs a run on those hosts |
 
 ---
@@ -80,6 +80,9 @@ voxen create
   `libasound2-dev`), the Xcode command line tools on macOS, and MinGW-w64 or
   LLVM/clang on Windows.
 - Opus is pure Go, so no `libopus` install is needed.
+- Echo cancellation and noise suppression need `libspeexdsp-dev` **and** a build with
+  `-tags speex` (`make build-speex`). The default build reports them as unavailable
+  rather than pretending.
 - Building with `CGO_ENABLED=0` still works; audio is then reported as
   unavailable instead of silently producing no sound.
 

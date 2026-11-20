@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/s4chdev/voxen/internal/audio"
+	"github.com/s4chdev/voxen/internal/dsp"
 	"github.com/s4chdev/voxen/internal/identity"
 	"github.com/s4chdev/voxen/internal/ipc"
 	"github.com/s4chdev/voxen/internal/paths"
@@ -111,6 +112,26 @@ func (s *Server) doctor(ctx context.Context) ipc.DoctorResult {
 		add("audio", "pass",
 			fmt.Sprintf("%s: capture and playback both open", probe.Backend),
 			"run 'voxen devices' to list them")
+	}
+
+	// Audio preprocessing. Reported separately from audio because a working audio
+	// path with no echo cancellation is a very different experience from one
+	// without, and the user needs to know which they have.
+	backend := dsp.BackendName()
+	switch {
+	case !dsp.Available():
+		add("audio-processing", "unavailable",
+			"no preprocessing backend in this build; echo cancellation and noise suppression are unavailable",
+			"rebuild with -tags speex (needs libspeexdsp-dev); use a headset meanwhile")
+	case !s.cfg.Audio.EchoCancellation && !s.cfg.Audio.NoiseSuppression:
+		add("audio-processing", "warn",
+			backend+" is compiled in but disabled in configuration",
+			"set audio.echo_cancellation or audio.noise_suppression if you use speakers")
+	default:
+		add("audio-processing", "pass",
+			fmt.Sprintf("%s active (echo cancellation %v, noise suppression %v)",
+				backend, s.cfg.Audio.EchoCancellation, s.cfg.Audio.NoiseSuppression),
+			"")
 	}
 
 	// Clock: signed statements depend on reasonable time synchronisation.

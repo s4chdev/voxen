@@ -28,15 +28,19 @@ func (s *Server) audioStats() ipc.AudioStatus {
 		return ipc.AudioStatus{Muted: s.muted.Load()}
 	}
 	st := bridge.Stats()
+	stages := bridge.Stages()
 	return ipc.AudioStatus{
-		Running:        st.Running,
-		Muted:          st.Muted,
-		FramesSent:     st.FramesSent,
-		FramesReceived: st.FramesReceived,
-		InputDropped:   st.InputDropped,
-		OutputXRuns:    st.OutputXRuns,
-		InputDevice:    st.InputDevice,
-		OutputDevice:   st.OutputDevice,
+		EchoCancellation: stages.EchoCancellation,
+		NoiseSuppression: stages.NoiseSuppression,
+		DSPBackend:       stages.Backend,
+		Running:          st.Running,
+		Muted:            st.Muted,
+		FramesSent:       st.FramesSent,
+		FramesReceived:   st.FramesReceived,
+		InputDropped:     st.InputDropped,
+		OutputXRuns:      st.OutputXRuns,
+		InputDevice:      st.InputDevice,
+		OutputDevice:     st.OutputDevice,
 	}
 }
 
@@ -56,9 +60,11 @@ func (s *Server) startAudio(controller *Controller) {
 		return
 	}
 	bridge := NewAudioBridge(s.audio, s.log.With("component", "audio"), AudioBridgeConfig{
-		InputDevice:  s.cfg.Audio.InputDevice,
-		OutputDevice: s.cfg.Audio.OutputDevice,
-		Muted:        s.muted.Load(),
+		InputDevice:      s.cfg.Audio.InputDevice,
+		OutputDevice:     s.cfg.Audio.OutputDevice,
+		Muted:            s.muted.Load(),
+		EchoCancellation: s.cfg.Audio.EchoCancellation,
+		NoiseSuppression: s.cfg.Audio.NoiseSuppression,
 	}, controller.ActivePeers)
 
 	// Speech transitions update the controller, which is where "voxen peers"

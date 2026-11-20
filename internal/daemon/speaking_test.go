@@ -13,6 +13,7 @@ import (
 
 	"github.com/s4chdev/voxen/internal/audio"
 	"github.com/s4chdev/voxen/internal/daemon"
+	"github.com/s4chdev/voxen/internal/dsp"
 	"github.com/s4chdev/voxen/internal/media"
 )
 
@@ -251,4 +252,101 @@ func TestMutedPeerStillCountsAsSpeaking(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("a muted peer that is speaking was not reported as speaking")
+}
+
+// TestBridgeReportsProcessingHonestly proves the bridge reports what is actually
+// running. A build without the backend must report none, so status never claims
+// echo cancellation that is not happening.
+func TestBridgeReportsProcessingHonestly(t *testing.T) {
+	engine := usableEngine(t)
+	defer engine.Close()
+
+	bridge := daemon.NewAudioBridge(engine,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		daemon.AudioBridgeConfig{EchoCancellation: true, NoiseSuppression: true},
+		func() []media.ActivePeer { return nil })
+	if err := bridge.Start(context.Background()); err != nil {
+		t.Skipf("cannot start audio: %v", err)
+	}
+	defer bridge.Stop()
+
+	stages := bridge.Stages()
+	if dsp.Available() {
+		if stages.Backend == "none" {
+			t.Fatal("a backend is compiled in but the bridge reports none active")
+		}
+		if !stages.EchoCancellation || !stages.NoiseSuppression {
+			t.Fatalf("requested both stages but the bridge reports %+v", stages)
+		}
+	} else {
+		if stages.Backend != "none" {
+			t.Fatalf("no backend compiled in but the bridge reports %q", stages.Backend)
+		}
+		if stages.EchoCancellation || stages.NoiseSuppression {
+			t.Fatalf("no backend but stages are claimed active: %+v", stages)
+		}
+	}
+}
+
+// TestBridgeReferenceReachesProcessor proves the playback signal is available to
+// the canceller. Without it echo cancellation cannot work at all, and the failure is
+// silent: audio still flows, it is just uncancelled.
+func TestBridgeReferenceReachesProcessor(t *testing.T) {
+	engine := usableEngine(t)
+	defer engine.Close()
+
+	a := newFakeSession()
+	b := newFakeSession()
+	list := func() []media.ActivePeer {
+		return []media.ActivePeer{{PeerID: "a", Session: a}, {PeerID: "b", Session: b}}
+	}
+	bridge := daemon.NewAudioBridge(engine,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		daemon.AudioBridgeConfig{}, list)
+	if err := bridge.Start(context.Background()); err != nil {
+		t.Skipf("cannot start audio: %v", err)
+	}
+	defer bridge.Stop()
+
+	// Feed audio from a peer so the playback loop writes frames.
+	frame := make([]int16, audio.FramesPerPacket)
+	for i := range frame {
+		frame[i] = 3000
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			select {
+			case a.incoming <- frame:
+			default:
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	// The reference buffer is populated by the playback loop; give it time.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		ref := bridge.ReferenceForTest()
+		if len(ref) > 0 {
+			var nonZero bool
+			for _, v := range ref {
+				if v != 0 {
+					nonZero = true
+					break
+				}
+			}
+			if nonZero {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("the playback reference never reached the bridge; echo cancellation would be inert")
 }

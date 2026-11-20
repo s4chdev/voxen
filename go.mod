@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/gen2brain/malgo v0.11.28
 	github.com/gorilla/websocket v1.5.3
+	github.com/kechako/go-speexdsp v0.2.2
 	github.com/pion/webrtc/v4 v4.2.27
 	github.com/spf13/cobra v1.10.2
 	github.com/thesyncim/gopus v0.2.3

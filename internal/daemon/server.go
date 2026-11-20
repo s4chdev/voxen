@@ -267,7 +267,20 @@ func (s *Server) cleanup() {
 		s.stopCancel()
 	}
 	s.shutdownRequested.Store(true)
-	s.audioPending.Wait()
+	// Wait for in-flight audio opens, but never unconditionally. The cancel above
+	// aborts the open's context; a driver that ignores it must not hold shutdown
+	// hostage. If it does, the bridge leaks rather than the process hanging, which is
+	// the right trade for a stop request.
+	waited := make(chan struct{})
+	go func() {
+		s.audioPending.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+	case <-time.After(2 * time.Second):
+		s.log.Warn("an audio device open did not cancel; continuing shutdown")
+	}
 
 	s.controllerMu.Lock()
 	bridge := s.bridge

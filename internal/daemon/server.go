@@ -77,6 +77,11 @@ type Server struct {
 	// shutdownRequested prevents an in-flight audio open from publishing a bridge
 	// that nothing will close.
 	shutdownRequested atomic.Bool
+	// stopCtx is cancelled when the daemon begins stopping. Blocking work such as a
+	// device open watches it, so a stop request interrupts the work instead of
+	// waiting for a timeout.
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
 
 	mu       sync.Mutex
 	sessions map[string]context.CancelFunc
@@ -127,6 +132,7 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 		shutdown: make(chan struct{}),
 		sessions: make(map[string]context.CancelFunc),
 	}
+	s.stopCtx, s.stopCancel = context.WithCancel(context.Background())
 	s.muted.Store(false)
 
 	// Media is wired to the trust store through a resolver rather than by
@@ -240,9 +246,21 @@ func (s *Server) closeOnce() {
 	}
 }
 
+// shutdownCtx returns a context cancelled when the daemon begins stopping.
+func (s *Server) shutdownCtx() context.Context {
+	if s.stopCtx != nil {
+		return s.stopCtx
+	}
+	return context.Background()
+}
+
 func (s *Server) cleanup() {
-	// Stop any audio open that is still in flight, and wait for it, so nothing
-	// publishes a bridge after we decide to tear down.
+	// Interrupt any audio open that is still in flight, then wait for it, so nothing
+	// publishes a bridge after we decide to tear down and a wedged driver cannot
+	// delay the stop.
+	if s.stopCancel != nil {
+		s.stopCancel()
+	}
 	s.shutdownRequested.Store(true)
 	s.audioPending.Wait()
 

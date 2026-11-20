@@ -101,6 +101,13 @@ func (s *Server) startAudio(controller *Controller) {
 	go s.openAudioAsync(bridge, controller)
 }
 
+// audioOpenTimeout bounds how long opening audio devices may take.
+//
+// It is deliberately short. Shutdown waits for in-flight opens, so an over-long
+// budget here turns "voxen stop" into a multi-second hang on a machine whose audio
+// service is broken - which is exactly when a user is trying to stop it.
+const audioOpenTimeout = 5 * time.Second
+
 // stopAudio closes the devices when leaving a room.
 // stopAudio closes the devices and waits for the audio loops to acknowledge.
 //
@@ -192,7 +199,11 @@ func (s *Server) openAudioAsync(bridge *AudioBridge, controller *Controller) {
 	s.audioPending.Add(1)
 	defer s.audioPending.Done()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// The open is cancelled by shutdown as well as by its own timeout, so a stop
+	// request interrupts a wedged device open instead of waiting for the budget to
+	// expire. Shutdown waits for this goroutine, so "how long can an open take"
+	// would otherwise become "how long does voxen stop take".
+	ctx, cancel := context.WithTimeout(s.shutdownCtx(), audioOpenTimeout)
 	defer cancel()
 
 	if err := bridge.Start(ctx); err != nil {

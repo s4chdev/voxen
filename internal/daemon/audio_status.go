@@ -185,6 +185,13 @@ func (s *Server) setPeerMute(params jsonRaw) (any, error) {
 
 // openAudioAsync opens the audio devices for a call without blocking the caller.
 func (s *Server) openAudioAsync(bridge *AudioBridge, controller *Controller) {
+	// Register the in-flight open so shutdown can wait for it. Without this, a
+	// daemon that closes while devices are opening can exit with a live bridge
+	// behind it, and the next thing to touch the audio backend inherits devices
+	// nobody owns.
+	s.audioPending.Add(1)
+	defer s.audioPending.Done()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -195,16 +202,20 @@ func (s *Server) openAudioAsync(bridge *AudioBridge, controller *Controller) {
 	}
 
 	// Publish only on success, and only if this bridge is still the current one: the
-	// room may have been left while the devices were opening.
+	// room may have been left, or the daemon may be shutting down, while the devices
+	// were opening.
 	s.controllerMu.Lock()
 	current := s.controller
 	already := s.bridge != nil
-	if current == controller && !already {
+	shuttingDown := s.shutdownRequested.Load()
+	if current == controller && !already && !shuttingDown {
 		s.bridge = bridge
 		s.controllerMu.Unlock()
 		s.log.Info("call audio is live")
 		return
 	}
 	s.controllerMu.Unlock()
+
+	// Either the call ended or we are stopping: nothing else will close this.
 	bridge.Stop()
 }

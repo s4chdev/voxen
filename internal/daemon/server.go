@@ -71,6 +71,12 @@ type Server struct {
 	// mutedPeers is the local per-participant mute set, kept across calls.
 	mutedPeersMu sync.Mutex
 	mutedPeers   map[string]bool
+	// audioPending counts audio opens in flight. Shutdown waits for them so it does
+	// not exit while devices are being opened.
+	audioPending sync.WaitGroup
+	// shutdownRequested prevents an in-flight audio open from publishing a bridge
+	// that nothing will close.
+	shutdownRequested atomic.Bool
 
 	mu       sync.Mutex
 	sessions map[string]context.CancelFunc
@@ -235,6 +241,11 @@ func (s *Server) closeOnce() {
 }
 
 func (s *Server) cleanup() {
+	// Stop any audio open that is still in flight, and wait for it, so nothing
+	// publishes a bridge after we decide to tear down.
+	s.shutdownRequested.Store(true)
+	s.audioPending.Wait()
+
 	s.controllerMu.Lock()
 	bridge := s.bridge
 	s.bridge = nil

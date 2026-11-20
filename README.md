@@ -6,9 +6,17 @@ Windows and macOS. One Go core, a background daemon, and a CLI you can script.
 ```
 voxen init --name alice
 voxen start
-voxen verify C6971DF6ABDD7317B89178DEFBB2BF88E21A24699C7E27F48EB1090B51E8C1D9
-voxen create
+voxen call            # prints: 265P-DKJV-2AM9
 ```
+
+On the other machine:
+
+```
+voxen join 265P-DKJV-2AM9
+```
+
+That is the whole setup. One code, read out or pasted. No fingerprint comparison,
+no room IDs, no accounts.
 
 > **Build status: calls carry real microphone audio.**
 > Identity, the daemon, the CLI, the security state machines, a self-hosted

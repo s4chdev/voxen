@@ -162,23 +162,23 @@ func TestSignalingRelayAndDirectMedia(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	roomID, _, err := aliceClient.CreateRoom(ctx)
+	created, err := aliceClient.CreateRoom(ctx)
 	if err != nil {
 		t.Fatalf("create room: %v", err)
 	}
-	members, err := bobClient.JoinRoom(ctx, roomID)
+	joined, err := bobClient.JoinRoom(ctx, created.RoomID)
 	if err != nil {
 		t.Fatalf("join room: %v", err)
 	}
-	if len(members) != 2 {
-		t.Fatalf("bob sees %d members, want 2", len(members))
+	if len(joined.Members) != 2 {
+		t.Fatalf("bob sees %d members, want 2", len(joined.Members))
 	}
 
 	const sessionID = "e2e-session-1"
 	params := media.DefaultOpusParameters(28000, 20)
 	shared := func(self, peer *testSigner) (*media.WebRTCSession, error) {
 		return media.NewWebRTCSession(ctx, media.SessionConfig{
-			RoomID: roomID, SessionID: sessionID,
+			RoomID: created.RoomID, SessionID: sessionID,
 			LocalIdentity: self, ExpectedPeerKey: peer.pub,
 			Parameters: params, StatementTTL: 2 * time.Minute,
 			ReplayGuard: security.NewReplayGuard(64),
@@ -370,15 +370,15 @@ func TestSignalingRelayRejectsCrossRoomInjection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	roomA, _, err := alice.CreateRoom(ctx)
+	createdA, err := alice.CreateRoom(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := bob.JoinRoom(ctx, roomA); err != nil {
+	if _, err := bob.JoinRoom(ctx, createdA.RoomID); err != nil {
 		t.Fatal(err)
 	}
 	// Eve is in her own room and knows Bob's routing ID.
-	if _, _, err := eve.CreateRoom(ctx); err != nil {
+	if _, err := eve.CreateRoom(ctx); err != nil {
 		t.Fatal(err)
 	}
 

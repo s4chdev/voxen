@@ -126,6 +126,16 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 	// Media is wired to the trust store through a resolver rather than by
 	// handing the media plane a key store. A session can therefore only be
 	// created for a fingerprint the local user has verified.
+	// From here on, any error path must release the audio backend. Each MiniAudio
+	// engine owns a miniaudio context, and leaking one per failed construction
+	// eventually makes InitContext abort inside cgo, which presents as a random
+	// SIGABRT in unrelated tests.
+	cleanupOnError := func() {
+		if s.audio != nil {
+			_ = s.audio.Close()
+		}
+	}
+
 	manager, err := media.NewWebRTCManager(media.ManagerConfig{
 		Identity:       signerAdapter{id: id},
 		Parameters:     media.DefaultOpusParameters(cfg.Audio.Bitrate, cfg.Audio.FrameMS),
@@ -135,6 +145,7 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 		Logger:         opts.Logger.With("component", "media"),
 	})
 	if err != nil {
+		cleanupOnError()
 		return nil, fmt.Errorf("daemon: create media manager: %w", err)
 	}
 	s.media = manager
@@ -146,6 +157,7 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 	}
 
 	if ctx.Err() != nil {
+		cleanupOnError()
 		return nil, ctx.Err()
 	}
 	return s, nil
@@ -228,10 +240,17 @@ func (s *Server) cleanup() {
 	s.bridge = nil
 	s.controllerMu.Unlock()
 	if bridge != nil {
-		// Bounded: a wedged audio driver must not stop the process exiting.
-		s.stopAudioAsync(bridge)
+		bridge.Stop()
 	}
-	_ = s.audio.Close()
+	// The engine is closed only after the bridge has been asked to stop, and the
+	// bridge closes its device streams before returning. Closing the engine while a
+	// device still exists frees the backend context out from under it, which
+	// underflows PulseAudio's client refcount and aborts the process from inside C.
+	// If the bridge teardown timed out, the engine is deliberately leaked rather
+	// than freed under a live device: leaking is recoverable, aborting is not.
+	if bridge == nil || bridge.FullyStopped() {
+		_ = s.audio.Close()
+	}
 	s.controllerMu.Lock()
 	if s.controller != nil {
 		s.controller.Close()

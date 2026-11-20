@@ -160,7 +160,7 @@ func TestRoomCommandsNeedADaemon(t *testing.T) {
 	if _, errOut, code := sb.execute("init", "--name", "alice"); code != cli.ExitOK {
 		t.Fatalf("init failed: %s", errOut)
 	}
-	for _, args := range [][]string{{"create"}, {"join", "room-1"}} {
+	for _, args := range [][]string{{"call"}, {"join", "D8CY-2XWT-FME0"}} {
 		_, errOut, code := sb.execute(args...)
 		if code != cli.ExitUnavailable {
 			t.Fatalf("%v exit code = %d, want %d (%s)", args, code, cli.ExitUnavailable, errOut)

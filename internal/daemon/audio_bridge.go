@@ -481,6 +481,25 @@ func (b *AudioBridge) Stop() {
 // stopWaitTimeout bounds how long Stop waits for its loops to exit.
 const stopWaitTimeout = 2 * time.Second
 
+// FullyStopped reports whether every loop exited within the teardown deadline.
+//
+// It exists so the owner of the audio engine can decide whether it is safe to free
+// backend resources. Freeing them while a loop is mid-call is a use-after-free that
+// presents as an abort inside the C library, so the engine prefers to leak.
+func (b *AudioBridge) FullyStopped() bool {
+	done := make(chan struct{})
+	go func() {
+		b.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(stopWaitTimeout):
+		return false
+	}
+}
+
 // SetObserver installs the speech-state callback. Safe to call before or during a
 // call; a nil observer disables reporting.
 func (b *AudioBridge) SetObserver(fn func(peerID string, speaking bool)) {

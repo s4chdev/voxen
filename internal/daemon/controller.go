@@ -3,15 +3,18 @@ package daemon
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/s4chdev/voxen/internal/identity"
+	"github.com/s4chdev/voxen/internal/invite"
 	"github.com/s4chdev/voxen/internal/ipc"
 	"github.com/s4chdev/voxen/internal/media"
 	"github.com/s4chdev/voxen/internal/room"
@@ -44,13 +47,20 @@ type Controller struct {
 	// outlive the session and leak into a later rejoin.
 	onPeerGone func(peerID string)
 
-	mu       sync.Mutex
-	client   *signaling.Client
-	room     *room.Room
-	roomID   string
-	sessions map[string]*peerSession // keyed by signaling peer ID
-	identity *identity.Identity
-	cfg      ControllerConfig
+	mu     sync.Mutex
+	client *signaling.Client
+	room   *room.Room
+	roomID string
+	// codeCheck is the check portion of the code this call issued, empty when this
+	// participant joined rather than created. Only the creator validates acceptances.
+	codeCheck string
+	sessions  map[string]*peerSession // keyed by signaling peer ID
+	// roomMembers holds names learned out of band from invite acceptances, keyed by
+	// fingerprint. The signaling roster carries a display name too, but it is
+	// server-supplied; this is the one the peer proved it owns.
+	roomMembers map[string]memberInfo
+	identity    *identity.Identity
+	cfg         ControllerConfig
 
 	// events is a bounded ring of recent lifecycle events for "voxen status".
 	events []ipc.RoomEvent
@@ -70,6 +80,13 @@ type PeerResolver interface {
 	// the key does not hash to the pinned fingerprint, so a mismatched key can
 	// never silently take over a pin.
 	BindKey(pub ed25519.PublicKey) error
+	// InviteBound records a key that was authenticated by a verified invite code.
+	//
+	// The distinction matters: this is trust-on-first-use, established because the
+	// user possessed the code, not because they compared a fingerprint. Recording
+	// it as verified keeps the mesh usable; the note on the entry says how it was
+	// established so an audit can tell the two apart.
+	InviteBound(pub ed25519.PublicKey) error
 }
 
 // Logger is the small logging surface the controller needs.
@@ -116,12 +133,13 @@ func NewController(mediaMgr media.Manager, trust PeerResolver, id *identity.Iden
 		cfg.MaxMembers = 5
 	}
 	return &Controller{
-		media:    mediaMgr,
-		trust:    trust,
-		identity: id,
-		log:      log,
-		cfg:      cfg,
-		sessions: make(map[string]*peerSession),
+		media:       mediaMgr,
+		trust:       trust,
+		identity:    id,
+		log:         log,
+		cfg:         cfg,
+		sessions:    make(map[string]*peerSession),
+		roomMembers: make(map[string]memberInfo),
 	}
 }
 
@@ -141,19 +159,37 @@ func (c *Controller) CreateRoom(ctx context.Context) (ipc.RoomResult, error) {
 
 	joinCtx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
 	defer cancel()
-	roomID, members, err := client.CreateRoom(joinCtx)
+	info, err := client.CreateRoom(joinCtx)
 	if err != nil {
 		client.Close()
 		return ipc.RoomResult{}, fmt.Errorf("controller: create room: %w", err)
 	}
 
-	if err := c.activate(ctx, client, roomID, members); err != nil {
+	// Complete the shared code with a check derived from our own key. The joiner
+	// recomputes it from the key it is handed, so a substituted key fails.
+	code, err := invite.Parse(info.Code + "0000")
+	if err != nil {
+		client.Close()
+		return ipc.RoomResult{}, fmt.Errorf("controller: server issued an invalid room code: %w", err)
+	}
+	full, err := code.WithCheck(c.identity.PublicKey)
+	if err != nil {
 		client.Close()
 		return ipc.RoomResult{}, err
 	}
-	c.log.Info("room created", "room", roomID, "members", len(members))
+
+	if err := c.activate(ctx, client, info.RoomID, info.Members); err != nil {
+		client.Close()
+		return ipc.RoomResult{}, err
+	}
+	c.mu.Lock()
+	c.codeCheck = full.Check
+	c.mu.Unlock()
+	c.log.Info("room created", "room", info.RoomID, "code", full.String(), "members", len(info.Members))
 	return ipc.RoomResult{
 		Room: c.roomState(),
+		// ShareCode is the one thing the caller needs to tell other people.
+		ShareCode: full.String(),
 	}, nil
 }
 
@@ -176,19 +212,146 @@ func (c *Controller) JoinRoom(ctx context.Context, roomID string) (ipc.RoomResul
 
 	joinCtx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
 	defer cancel()
-	members, err := client.JoinRoom(joinCtx, roomID)
+	info, err := client.JoinRoom(joinCtx, roomID)
 	if err != nil {
 		client.Close()
 		return ipc.RoomResult{}, fmt.Errorf("controller: join room: %w", err)
 	}
 
-	if err := c.activate(ctx, client, roomID, members); err != nil {
+	if err := c.activate(ctx, client, info.RoomID, info.Members); err != nil {
 		client.Close()
 		return ipc.RoomResult{}, err
 	}
-	c.log.Info("joined room", "room", roomID, "members", len(members))
+	c.log.Info("joined room", "room", info.RoomID, "members", len(info.Members))
 	return ipc.RoomResult{Room: c.roomState()}, nil
 }
+
+// JoinRoomByCode joins using the short code a person shares.
+//
+// The code carries a check derived from the inviter's key, and the server supplies
+// that key with the roster. Recomputing the check is what stops a compromised server
+// from substituting its own identity: a swapped key produces a different check, and
+// the join is refused before any media is negotiated.
+func (c *Controller) JoinRoomByCode(ctx context.Context, codeText string) (ipc.RoomResult, error) {
+	code, err := invite.Parse(codeText)
+	if err != nil {
+		return ipc.RoomResult{}, err
+	}
+	if code.Check == "" {
+		return ipc.RoomResult{}, fmt.Errorf("%w: the code is missing its check", invite.ErrMalformed)
+	}
+
+	c.mu.Lock()
+	if c.roomID != "" {
+		c.mu.Unlock()
+		return ipc.RoomResult{}, ErrRoomBusy
+	}
+	c.mu.Unlock()
+
+	client, err := c.connect(ctx)
+	if err != nil {
+		return ipc.RoomResult{}, err
+	}
+
+	joinCtx, cancel := context.WithTimeout(ctx, c.cfg.JoinTimeout)
+	defer cancel()
+
+	// The code's room portion identifies the room; the server resolves it.
+	info, err := client.JoinRoomByCode(joinCtx, code.Room)
+	if err != nil {
+		client.Close()
+		return ipc.RoomResult{}, fmt.Errorf("controller: join room: %w", err)
+	}
+
+	// Verify before anything else. This is the step that makes the code a trust
+	// anchor rather than a hint.
+	// The signaling protocol advertises public keys as lowercase hex, not base64.
+	// Decoding with the wrong codec produced "invalid inviter key" for a perfectly
+	// good key, which is exactly the kind of mismatch that only shows up when the
+	// two halves are finally run against each other.
+	creatorKey, err := hex.DecodeString(info.CreatorKey)
+	if err != nil || len(creatorKey) != ed25519.PublicKeySize {
+		client.Close()
+		return ipc.RoomResult{}, fmt.Errorf("controller: server supplied an invalid inviter key")
+	}
+	if err := code.Verify(ed25519.PublicKey(creatorKey)); err != nil {
+		client.Close()
+		return ipc.RoomResult{}, fmt.Errorf("%w: refusing to join a call whose identity does not match the code", err)
+	}
+	c.log.Info("invite code verified against the inviter's key",
+		"room", info.RoomID, "check", code.Check)
+
+	// Record the verified inviter in the trust store so the mesh can authenticate
+	// them without the user doing anything further.
+	if err := c.trust.InviteBound(pubFrom(creatorKey)); err != nil {
+		c.log.Debug("could not record the inviter's key", "error", err)
+	}
+
+	// Tell the room we accepted this code, and prove it. The creator uses this to
+	// trust us in return: without it only the joiner would trust anyone, and the
+	// mesh would never form, because both sides must be authenticated.
+	acceptance := acceptancePayload{
+		CodeCheck:    code.Check,
+		PublicKey:    hex.EncodeToString(c.identity.PublicKey),
+		DisplayName:  c.identity.DisplayName,
+		SignedAtUnix: time.Now().Unix(),
+	}
+	sig := c.identity.Sign(acceptanceSigningBytes(code.Check, c.identity.PublicKey))
+	payload, err := json.Marshal(acceptance)
+	if err != nil {
+		client.Close()
+		return ipc.RoomResult{}, err
+	}
+	wrapperBytes, err := json.Marshal(acceptanceEnvelope{
+		Acceptance: payload,
+		Signature:  base64.StdEncoding.EncodeToString(sig),
+	})
+	if err != nil {
+		client.Close()
+		return ipc.RoomResult{}, err
+	}
+	_ = client.Send(ctx, protocol.Envelope{
+		Version: protocol.ProtocolVersion,
+		Type:    protocol.TypeAdmit,
+		Payload: wrapperBytes,
+	})
+
+	if err := c.activate(ctx, client, info.RoomID, info.Members); err != nil {
+		client.Close()
+		return ipc.RoomResult{}, err
+	}
+	c.log.Info("joined room by code", "room", info.RoomID, "members", len(info.Members))
+	return ipc.RoomResult{Room: c.roomState()}, nil
+}
+
+// acceptancePayload is what a joiner announces after verifying a code.
+type acceptancePayload struct {
+	// CodeCheck is the check portion of the code the joiner accepted. Echoing it
+	// proves the joiner saw the same code the creator issued.
+	CodeCheck    string `json:"code_check"`
+	PublicKey    string `json:"public_key"`
+	DisplayName  string `json:"display_name"`
+	SignedAtUnix int64  `json:"signed_at"`
+}
+
+// acceptanceEnvelope wraps the payload with its signature.
+type acceptanceEnvelope struct {
+	Acceptance json.RawMessage `json:"acceptance"`
+	Signature  string          `json:"signature"`
+}
+
+// acceptanceSigningBytes is the domain-separated transcript a joiner signs.
+func acceptanceSigningBytes(codeCheck string, pub ed25519.PublicKey) []byte {
+	buf := make([]byte, 0, 64+len(codeCheck)+len(pub))
+	buf = append(buf, []byte("voxen/v1/invite-acceptance|")...)
+	buf = append(buf, []byte(codeCheck)...)
+	buf = append(buf, '|')
+	buf = append(buf, pub...)
+	return buf
+}
+
+// pubFrom converts raw bytes to a public key.
+func pubFrom(b []byte) ed25519.PublicKey { return ed25519.PublicKey(b) }
 
 func (c *Controller) connect(ctx context.Context) (*signaling.Client, error) {
 	if c.cfg.SignalingURL == "" {
@@ -303,6 +466,8 @@ func (c *Controller) handleEnvelope(ctx context.Context, client *signaling.Clien
 			return
 		}
 		c.onPeerJoined(ctx, client, m)
+	case protocol.TypeAdmit:
+		c.onInviteAcceptance(ctx, env)
 	case protocol.TypePeerLeave:
 		c.onPeerLeft(ctx, env.From)
 	case protocol.TypeOffer:
@@ -856,7 +1021,7 @@ func (c *Controller) Peers() []ipc.PeerState {
 		}
 		out = append(out, ipc.PeerState{
 			ID:          ps.peerID,
-			DisplayName: ps.displayName,
+			DisplayName: c.nameLocked(ps),
 			Fingerprint: ps.fingerprint,
 			Verified:    true,
 			Connection:  string(ps.state),
@@ -893,6 +1058,17 @@ func (c *Controller) Events() []ipc.RoomEvent {
 
 // maxEvents bounds the event ring.
 const maxEvents = 64
+
+// nameLocked resolves a peer's display name. The caller must hold c.mu.
+func (c *Controller) nameLocked(ps *peerSession) string {
+	if ps.displayName != "" {
+		return ps.displayName
+	}
+	if m, ok := c.roomMembers[ps.fingerprint]; ok {
+		return m.DisplayName
+	}
+	return ""
+}
 
 func (c *Controller) recordEvent(e ipc.RoomEvent) {
 	if e.At == "" {
@@ -958,4 +1134,88 @@ func compareKeys(a, b ed25519.PublicKey) int {
 		}
 	}
 	return 0
+}
+
+// onInviteAcceptance records a joiner that proved it accepted our code.
+//
+// This is what makes the one-code flow symmetric. The joiner verified the creator's
+// key against the code, and the creator now trusts the joiner because the joiner
+// demonstrated it holds the same code: it echoed the check and signed the
+// transcript. A participant who guessed a room name but never saw the code cannot
+// produce this signature.
+func (c *Controller) onInviteAcceptance(_ context.Context, env protocol.Envelope) {
+	var wrapper acceptanceEnvelope
+	if err := json.Unmarshal(env.Payload, &wrapper); err != nil {
+		c.recordEvent(ipc.RoomEvent{Kind: "protocol_error", PeerID: env.From, Message: "malformed acceptance"})
+		return
+	}
+	var payload acceptancePayload
+	if err := json.Unmarshal(wrapper.Acceptance, &payload); err != nil {
+		c.recordEvent(ipc.RoomEvent{Kind: "protocol_error", PeerID: env.From, Message: "malformed acceptance payload"})
+		return
+	}
+
+	// Only the creator is the authority on its own code.
+	c.mu.Lock()
+	ourCheck := c.codeCheck
+	c.mu.Unlock()
+	if ourCheck == "" {
+		return
+	}
+	if !strings.EqualFold(payload.CodeCheck, ourCheck) {
+		c.recordEvent(ipc.RoomEvent{
+			Kind: "peer_rejected", PeerID: env.From,
+			Message: "a participant presented a code check that does not match this call",
+		})
+		return
+	}
+
+	pub, err := hex.DecodeString(payload.PublicKey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		c.recordEvent(ipc.RoomEvent{Kind: "peer_rejected", PeerID: env.From, Message: "invalid key in acceptance"})
+		return
+	}
+	sig, err := base64.StdEncoding.DecodeString(wrapper.Signature)
+	if err != nil {
+		return
+	}
+	if !identity.Verify(ed25519.PublicKey(pub), acceptanceSigningBytes(payload.CodeCheck, pub), sig) {
+		c.recordEvent(ipc.RoomEvent{
+			Kind: "peer_rejected", PeerID: env.From,
+			Message: "acceptance signature is invalid",
+		})
+		return
+	}
+
+	if err := c.trust.InviteBound(ed25519.PublicKey(pub)); err != nil {
+		c.log.Debug("could not record the joiner's key", "error", err)
+	}
+
+	// Keep the name the joiner announced so the roster is readable. Without this the
+	// creator's peer list shows a fingerprint and no name, which is correct but
+	// unhelpful.
+	fp := identity.FingerprintFromPublic(ed25519.PublicKey(pub))
+	c.mu.Lock()
+	for _, ps := range c.sessions {
+		if ps.fingerprint == fp.String() && ps.displayName == "" {
+			ps.displayName = payload.DisplayName
+		}
+	}
+	if payload.DisplayName != "" {
+		if m, ok := c.roomMembers[fp.String()]; ok {
+			m.DisplayName = payload.DisplayName
+			c.roomMembers[fp.String()] = m
+		} else {
+			c.roomMembers[fp.String()] = memberInfo{DisplayName: payload.DisplayName}
+		}
+	}
+	c.mu.Unlock()
+
+	c.log.Info("participant proved the invite code; trusting it for this call",
+		"peer", env.From, "display_name", payload.DisplayName)
+}
+
+// memberInfo is what the controller learns about a participant beyond its key.
+type memberInfo struct {
+	DisplayName string
 }

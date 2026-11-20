@@ -350,7 +350,7 @@ func TestRoomCommandsReachTheDaemon(t *testing.T) {
 	e := newEnv(t)
 	e.mustRun("init", "--name", "tester")
 
-	for _, args := range [][]string{{"create"}, {"join", "room-1"}} {
+	for _, args := range [][]string{{"call"}, {"join", "D8CY-2XWT-FME0"}} {
 		_, errOut, code := e.run(args...)
 		if code != 3 {
 			t.Fatalf("%v exit code = %d, want 3 (daemon unavailable)\n%s", args, code, errOut)

@@ -171,11 +171,11 @@ func TestServerAssignsFromAndIgnoresSpoof(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	roomID, _, err := alice.CreateRoom(ctx)
+	created, err := alice.CreateRoom(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := bob.JoinRoom(ctx, roomID); err != nil {
+	if _, err := bob.JoinRoom(ctx, created.RoomID); err != nil {
 		t.Fatal(err)
 	}
 

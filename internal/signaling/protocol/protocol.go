@@ -86,6 +86,12 @@ type RoomStatePayload struct {
 	RoomID    string     `json:"room_id"`
 	CreatedAt time.Time  `json:"created_at,omitempty"`
 	Members   []PeerInfo `json:"members"`
+	// Code is the short, human-readable room code. It is derived from the room ID,
+	// so it is stable across reconnects, and it is what a user shares.
+	Code string `json:"code,omitempty"`
+	// CreatorKey is the room creator's Ed25519 public key, base64. A joiner
+	// recomputes the code's key check against it; a substituted key fails.
+	CreatorKey string `json:"creator_key,omitempty"`
 }
 
 // PeerInfo is one participant as advertised by the server.

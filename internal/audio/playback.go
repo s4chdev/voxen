@@ -17,8 +17,9 @@ import (
 // the oldest frame rather than blocking: a live call must not accumulate latency
 // when the network stalls.
 type playbackStream struct {
-	dev *malgo.Device
-	log *slog.Logger
+	dev    *malgo.Device
+	log    *slog.Logger
+	engine *MiniAudio
 
 	frames chan []int16
 	stats  StreamStats
@@ -87,7 +88,9 @@ func (s *playbackStream) Close() error {
 		_ = s.dev.Stop()
 		s.dev.Uninit()
 	}
-	close(s.frames)
+	if s.engine != nil {
+		s.engine.forget(s)
+	}
 	return nil
 }
 
@@ -111,6 +114,7 @@ func (m *MiniAudio) openPlayback(deviceID DeviceID) (*playbackStream, error) {
 
 	s := &playbackStream{
 		log:    m.log,
+		engine: m,
 		frames: make(chan []int16, 32),
 		stats:  StreamStats{DeviceID: deviceID},
 	}
@@ -150,6 +154,15 @@ func (m *MiniAudio) openPlayback(deviceID DeviceID) (*playbackStream, error) {
 	if err := dev.Start(); err != nil {
 		dev.Uninit()
 		return nil, errDeviceStart("playback", err)
+	}
+	// Register before returning, so Engine.Close can tear this stream down. An
+	// engine closed while a device is still open frees the backend context out from
+	// under that device, which underflows PulseAudio's client refcount and aborts
+	// the process from inside C.
+	if !m.watch(s) {
+		_ = dev.Stop()
+		dev.Uninit()
+		return nil, ErrUnavailable
 	}
 	return s, nil
 }

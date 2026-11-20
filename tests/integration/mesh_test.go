@@ -300,21 +300,21 @@ func TestRealBinariesFormMesh(t *testing.T) {
 	e.mustRun(alice, "verify", bobFP, "--name", "bob", "--note", "read over the phone")
 	e.mustRun(bob, "verify", aliceFP, "--name", "alice", "--note", "read over the phone")
 
-	roomOut := e.mustRun(alice, "--json", "create")
+	roomOut := e.mustRun(alice, "--json", "call")
 	var created struct {
-		Room struct {
-			InRoom bool   `json:"in_room"`
-			RoomID string `json:"room_id"`
-		} `json:"room"`
+		ShareCode string `json:"code"`
 	}
 	if err := json.Unmarshal([]byte(roomOut), &created); err != nil {
 		t.Fatalf("create json: %v\n%s", err, roomOut)
 	}
-	if !created.Room.InRoom || created.Room.RoomID == "" {
-		t.Fatalf("create produced no room: %s", roomOut)
+	if created.ShareCode == "" {
+		t.Fatalf("call produced no share code: %s", roomOut)
 	}
+	t.Logf("share code: %s", created.ShareCode)
 
-	e.mustRun(bob, "join", created.Room.RoomID)
+	// The code is the whole handshake: no fingerprint exchange, and the joiner
+	// verifies it against the caller's key before any audio flows.
+	e.mustRun(bob, "join", created.ShareCode)
 
 	// Both sides must reach a connected, verified, direct peer.
 	waitForConnected(t, e, alice, "alice")
@@ -377,16 +377,14 @@ func TestRealBinariesRefuseUnverifiedPeer(t *testing.T) {
 	e.startDaemon(alice)
 	e.startDaemon(bob)
 
-	roomOut := e.mustRun(alice, "--json", "create")
+	roomOut := e.mustRun(alice, "--json", "call")
 	var created struct {
-		Room struct {
-			RoomID string `json:"room_id"`
-		} `json:"room"`
+		ShareCode string `json:"code"`
 	}
 	if err := json.Unmarshal([]byte(roomOut), &created); err != nil {
 		t.Fatal(err)
 	}
-	e.mustRun(bob, "join", created.Room.RoomID)
+	e.mustRun(bob, "join", created.ShareCode)
 
 	// Allow the controller time to see and refuse the peer.
 	time.Sleep(3 * time.Second)
@@ -440,15 +438,13 @@ func TestRealBinariesThreePeerMesh(t *testing.T) {
 	}
 
 	var created struct {
-		Room struct {
-			RoomID string `json:"room_id"`
-		} `json:"room"`
+		ShareCode string `json:"code"`
 	}
-	if err := json.Unmarshal([]byte(e.mustRun(profiles[0], "--json", "create")), &created); err != nil {
+	if err := json.Unmarshal([]byte(e.mustRun(profiles[0], "--json", "call")), &created); err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range profiles[1:] {
-		e.mustRun(p, "join", created.Room.RoomID)
+		e.mustRun(p, "join", created.ShareCode)
 	}
 
 	// Every peer must reach two connected, direct peers.

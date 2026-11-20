@@ -16,8 +16,9 @@ import (
 // The backend delivers whatever format the device negotiated; this type converts
 // it to 48 kHz mono int16 and exposes it as fixed-size frames.
 type captureStream struct {
-	dev *malgo.Device
-	log *slog.Logger
+	dev    *malgo.Device
+	log    *slog.Logger
+	engine *MiniAudio
 
 	// frames receives converted, normalised frames from the audio thread.
 	frames chan []int16
@@ -43,8 +44,8 @@ func (s *captureStream) ReadFrames(ctx context.Context, pcm []int16) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case frame, ok := <-s.frames:
-			if !ok {
+		case frame := <-s.frames:
+			if frame == nil {
 				return ErrStreamGone
 			}
 			n := copy(pcm, frame)
@@ -84,7 +85,9 @@ func (s *captureStream) Close() error {
 		_ = s.dev.Stop()
 		s.dev.Uninit()
 	}
-	close(s.frames)
+	if s.engine != nil {
+		s.engine.forget(s)
+	}
 	return nil
 }
 
@@ -108,6 +111,7 @@ func (m *MiniAudio) openCapture(deviceID DeviceID) (*captureStream, error) {
 
 	s := &captureStream{
 		log:    m.log,
+		engine: m,
 		frames: make(chan []int16, 32),
 		stats:  StreamStats{DeviceID: deviceID},
 	}
@@ -152,6 +156,15 @@ func (m *MiniAudio) openCapture(deviceID DeviceID) (*captureStream, error) {
 	if err := dev.Start(); err != nil {
 		dev.Uninit()
 		return nil, errDeviceStart("capture", err)
+	}
+	// Register before returning, so Engine.Close can tear this stream down. An
+	// engine closed while a device is still open frees the backend context out from
+	// under that device, which underflows PulseAudio's client refcount and aborts
+	// the process from inside C.
+	if !m.watch(s) {
+		_ = dev.Stop()
+		dev.Uninit()
+		return nil, ErrUnavailable
 	}
 	return s, nil
 }

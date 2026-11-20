@@ -102,13 +102,20 @@ func (s *Server) startAudio(controller *Controller) {
 }
 
 // stopAudio closes the devices when leaving a room.
+// stopAudio closes the devices and waits for the audio loops to acknowledge.
+//
+// It is synchronous on purpose. Every alternative tried here - timing out and
+// continuing, stopping in the background - left audio loops running while their
+// backend context was freed, which underflows PulseAudio's client refcount and
+// aborts the process inside C. A slow shutdown is a much better failure than an
+// unpredictable crash, and the loops always exit because Stop closes their streams.
 func (s *Server) stopAudio() {
 	s.controllerMu.Lock()
 	bridge := s.bridge
 	s.bridge = nil
 	s.controllerMu.Unlock()
 	if bridge != nil {
-		s.stopAudioAsync(bridge)
+		bridge.Stop()
 		s.log.Info("call audio stopped")
 	}
 }
@@ -200,24 +207,4 @@ func (s *Server) openAudioAsync(bridge *AudioBridge, controller *Controller) {
 	}
 	s.controllerMu.Unlock()
 	bridge.Stop()
-}
-
-// audioStopTimeout bounds how long shutdown waits for audio teardown.
-//
-// A wedged driver must not prevent the process from exiting; the OS reclaims the
-// device when the process dies.
-const audioStopTimeout = 3 * time.Second
-
-// stopAudioAsync closes the devices without blocking the caller.
-func (s *Server) stopAudioAsync(bridge *AudioBridge) {
-	done := make(chan struct{})
-	go func() {
-		bridge.Stop()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(audioStopTimeout):
-		s.log.Warn("audio teardown timed out; continuing shutdown")
-	}
 }

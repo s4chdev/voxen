@@ -60,6 +60,13 @@ type roomState struct {
 	createdAt time.Time
 	creator   string
 	members   map[string]*peerConn
+	// code is the short, human-readable identifier derived from the room ID. Users
+	// share the code, the server maps it to the room. It is deterministic from the
+	// room ID so a restart does not invalidate a code already shared.
+	code string
+	// creatorKey is the creator's Ed25519 public key, used by joiners to verify that
+	// the code they were given belongs to the key the server hands them.
+	creatorKey string
 }
 
 // New builds a server. It does not listen until Run is called.

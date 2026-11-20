@@ -97,6 +97,20 @@ func (r trustResolver) IsPinned(fp identity.Fingerprint) bool {
 	return ok && entry.Level == identity.TrustVerified && entry.PublicKey == ""
 }
 
+// InviteBound trusts a key established by a verified invite code.
+//
+// This is deliberately weaker than a fingerprint comparison and is labelled as such
+// in the trust store, so "voxen trust" shows how each peer was authenticated.
+func (r trustResolver) InviteBound(pub ed25519.PublicKey) error {
+	store := r.store()
+	fp := identity.FingerprintFromPublic(pub)
+	if entry, ok := store.Lookup(fp); ok && entry.Level == identity.TrustVerified {
+		return nil // already trusted, by either route
+	}
+	_, err := store.VerifyKey(pub, "", "authenticated by invite code")
+	return err
+}
+
 // BindKey completes a pin with the observed key. The trust store re-derives the
 // fingerprint from the key and looks it up, so a key that does not hash to the
 // pinned value simply has no entry and is refused.
@@ -129,11 +143,21 @@ func (s *Server) roomJoin(ctx context.Context, params jsonRaw) (any, error) {
 	if err := decodeParams(params, &p); err != nil {
 		return nil, err
 	}
-	if p.RoomID == "" {
-		return nil, ipc.NewError(ipc.CodeBadRequest, "room_id is required")
-	}
+
 	c := s.controllerFor()
-	res, err := c.JoinRoom(ctx, p.RoomID)
+
+	// A code is the normal path: it is what a person shares, and it carries the
+	// check that authenticates the caller. The room ID path remains for tests and
+	// for scripting against a known room.
+	var res ipc.RoomResult
+	var err error
+	if p.Code != "" {
+		res, err = c.JoinRoomByCode(ctx, p.Code)
+	} else if p.RoomID != "" {
+		res, err = c.JoinRoom(ctx, p.RoomID)
+	} else {
+		return nil, ipc.NewError(ipc.CodeBadRequest, "a code or room_id is required")
+	}
 	if err != nil {
 		return nil, roomError(err)
 	}

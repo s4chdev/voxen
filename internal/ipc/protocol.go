@@ -366,18 +366,21 @@ type RoomCreateParams struct {
 	MaxMembers int    `json:"max_members,omitempty"`
 }
 
-// RoomJoinParams joins an existing room.
+// RoomJoinParams joins an existing room, by code or by room ID.
 type RoomJoinParams struct {
-	RoomID string `json:"room_id"`
-	// Invite is a signed invitation token issued by the room creator.
-	Invite string `json:"invite,omitempty"`
+	// Code is the short code a person shares, for example "D8CY-2XWT-FME0".
+	Code string `json:"code,omitempty"`
+	// RoomID is the server's identifier, used internally and by tests.
+	RoomID string `json:"room_id,omitempty"`
 }
 
 // RoomResult returns the resulting room state.
 type RoomResult struct {
 	Room RoomState `json:"room"`
-	// Invite is populated on create, for sharing out of band.
-	Invite string `json:"invite,omitempty"`
+	// ShareCode is the short code to give to other people, populated on create.
+	// This is the only thing a user needs to share; there is no separate room ID to
+	// read out and no fingerprint exchange.
+	ShareCode string `json:"share_code,omitempty"`
 }
 
 // RoomEventsResult returns the recent lifecycle events.

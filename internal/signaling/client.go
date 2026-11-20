@@ -23,7 +23,7 @@ import (
 // Client errors.
 var (
 	ErrClosed          = errors.New("signaling: connection closed")
-	ErrNoRoom          = errors.New("signaling: not in a room")
+	ErrNoRoom          = errors.New("signaling: room not found")
 	ErrNotConnected    = errors.New("signaling: not connected")
 	ErrVersionMismatch = errors.New("signaling: unsupported protocol version")
 )
@@ -290,46 +290,81 @@ func (c *Client) Close() error {
 	return nil
 }
 
+// RoomInfo is the room state a server reports after create or join.
+type RoomInfo struct {
+	RoomID  string
+	Members []protocol.PeerInfo
+	// Code is the short, human-readable room code.
+	Code string
+	// CreatorKey is the inviter's Ed25519 public key, base64. A joiner checks the
+	// code against it, which is what stops a server substituting an identity.
+	CreatorKey string
+}
+
 // CreateRoom asks the server for a new room and waits for its state.
-func (c *Client) CreateRoom(ctx context.Context) (string, []protocol.PeerInfo, error) {
+func (c *Client) CreateRoom(ctx context.Context) (RoomInfo, error) {
 	if err := c.Send(ctx, protocol.Envelope{
 		Version: protocol.ProtocolVersion, Type: protocol.TypeRoomCreate,
 		Payload: mustJSON(map[string]string{"name": ""}),
 	}); err != nil {
-		return "", nil, err
+		return RoomInfo{}, err
 	}
 	return c.waitForRoomState(ctx)
 }
 
-// JoinRoom joins an existing room and waits for the roster.
-func (c *Client) JoinRoom(ctx context.Context, roomID string) ([]protocol.PeerInfo, error) {
+// JoinRoom joins an existing room by ID and waits for the roster.
+func (c *Client) JoinRoom(ctx context.Context, roomID string) (RoomInfo, error) {
 	if err := c.Send(ctx, protocol.Envelope{
 		Version: protocol.ProtocolVersion, Type: protocol.TypeRoomJoin,
 		Payload: mustJSON(map[string]string{"room_id": roomID}),
 	}); err != nil {
-		return nil, err
+		return RoomInfo{}, err
 	}
-	_, members, err := c.waitForRoomState(ctx)
-	return members, err
+	return c.waitForRoomState(ctx)
 }
 
-func (c *Client) waitForRoomState(ctx context.Context) (string, []protocol.PeerInfo, error) {
+// JoinRoomByCode joins a room using the short code a person shares.
+func (c *Client) JoinRoomByCode(ctx context.Context, roomCode string) (RoomInfo, error) {
+	if err := c.Send(ctx, protocol.Envelope{
+		Version: protocol.ProtocolVersion, Type: protocol.TypeRoomJoin,
+		Payload: mustJSON(map[string]string{"code": roomCode}),
+	}); err != nil {
+		return RoomInfo{}, err
+	}
+	return c.waitForRoomState(ctx)
+}
+
+func (c *Client) waitForRoomState(ctx context.Context) (RoomInfo, error) {
 	for {
 		env, err := c.Recv(ctx)
 		if err != nil {
-			return "", nil, err
+			return RoomInfo{}, err
 		}
-		if env.Type != protocol.TypeRoomState {
-			continue
+		switch env.Type {
+		case protocol.TypeError:
+			// A rejected join must surface the server's reason, not hang waiting
+			// for a roster that will never arrive.
+			var payload protocol.ErrorPayload
+			_ = json.Unmarshal(env.Payload, &payload)
+			if payload.Message != "" {
+				return RoomInfo{}, fmt.Errorf("%w: %s", ErrNoRoom, payload.Message)
+			}
+			return RoomInfo{}, ErrNoRoom
+		case protocol.TypeRoomState:
+			var payload protocol.RoomStatePayload
+			if err := json.Unmarshal(env.Payload, &payload); err != nil {
+				return RoomInfo{}, fmt.Errorf("signaling: decode room state: %w", err)
+			}
+			c.mu.Lock()
+			c.roomID = payload.RoomID
+			c.mu.Unlock()
+			return RoomInfo{
+				RoomID:     payload.RoomID,
+				Members:    payload.Members,
+				Code:       payload.Code,
+				CreatorKey: payload.CreatorKey,
+			}, nil
 		}
-		var payload protocol.RoomStatePayload
-		if err := json.Unmarshal(env.Payload, &payload); err != nil {
-			return "", nil, fmt.Errorf("signaling: decode room state: %w", err)
-		}
-		c.mu.Lock()
-		c.roomID = payload.RoomID
-		c.mu.Unlock()
-		return payload.RoomID, payload.Members, nil
 	}
 }
 

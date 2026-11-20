@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -43,6 +44,11 @@ type MiniAudio struct {
 	log *slog.Logger
 	// closed is set by Close so no new device can start afterwards.
 	closed atomic.Bool
+	// streams tracks live streams. The backend context cannot be released while
+	// any device still refers to it: doing so underflows the PulseAudio client
+	// refcount and aborts the process from inside C.
+	streamsMu sync.Mutex
+	streams   map[interface{ Close() error }]struct{}
 }
 
 // NewMiniAudio initialises the backend.
@@ -54,7 +60,12 @@ func NewMiniAudio(log *slog.Logger) (*MiniAudio, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBackendInit, err)
 	}
-	return &MiniAudio{ctx: ctx, log: log}, nil
+	liveContexts.Add(1)
+	return &MiniAudio{
+		ctx:     ctx,
+		log:     log,
+		streams: make(map[interface{ Close() error }]struct{}),
+	}, nil
 }
 
 // Version reports the backend and platform for diagnostics.
@@ -167,13 +178,47 @@ func (m *MiniAudio) Close() error {
 	if m.closed.Swap(true) {
 		return nil
 	}
-	// Devices are owned by their streams, which call Uninit exactly once in
-	// their own Close. Calling it again here would be a double free.
+
+	// Close every live stream first. Each stream owns its device and uninitialises
+	// it exactly once; the context can only be freed after the last device is gone.
+	m.streamsMu.Lock()
+	streams := make([]interface{ Close() error }, 0, len(m.streams))
+	for s := range m.streams {
+		streams = append(streams, s)
+	}
+	m.streams = make(map[interface{ Close() error }]struct{})
+	m.streamsMu.Unlock()
+
+	for _, s := range streams {
+		_ = s.Close()
+	}
+
 	if m.ctx != nil {
 		_ = m.ctx.Uninit()
 		m.ctx.Free()
+		m.ctx = nil
+		liveContexts.Add(-1)
 	}
 	return nil
+}
+
+// watch registers a stream for shutdown. It reports false when the engine is
+// already closed, so a caller does not hand back a stream nobody will close.
+func (m *MiniAudio) watch(s interface{ Close() error }) bool {
+	m.streamsMu.Lock()
+	defer m.streamsMu.Unlock()
+	if m.closed.Load() {
+		return false
+	}
+	m.streams[s] = struct{}{}
+	return true
+}
+
+// forget deregisters a stream that closed itself.
+func (m *MiniAudio) forget(s interface{ Close() error }) {
+	m.streamsMu.Lock()
+	delete(m.streams, s)
+	m.streamsMu.Unlock()
 }
 
 // findDevice resolves a DeviceID to the malgo device ID pointer. An empty ID

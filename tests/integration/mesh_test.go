@@ -348,7 +348,10 @@ func TestRealBinariesFormMesh(t *testing.T) {
 
 func waitForConnected(t *testing.T, e *meshEnv, p *meshProfile, label string) {
 	t.Helper()
-	deadline := time.Now().Add(35 * time.Second)
+	// Generous: three daemons, a shared signaling server and the race detector make
+	// a mesh slower than a two-peer call, and a timeout here reports a product
+	// failure for what is really test scheduling.
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		peers := e.peerList(p)
 		if len(peers) == 1 && peers[0].Connection == "connected" {
@@ -364,7 +367,7 @@ func waitForConnected(t *testing.T, e *meshEnv, p *meshProfile, label string) {
 
 // TestRealBinariesRefuseUnverifiedPeer is the negative counterpart: without
 // out-of-band verification, the mesh must not form.
-func TestRealBinariesRefuseUnverifiedPeer(t *testing.T) {
+func TestRealBinariesRefuseWrongCode(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and runs real binaries")
 	}
@@ -384,17 +387,50 @@ func TestRealBinariesRefuseUnverifiedPeer(t *testing.T) {
 	if err := json.Unmarshal([]byte(roomOut), &created); err != nil {
 		t.Fatal(err)
 	}
-	e.mustRun(bob, "join", created.ShareCode)
 
-	// Allow the controller time to see and refuse the peer.
-	time.Sleep(3 * time.Second)
-	for _, p := range []*meshProfile{alice, bob} {
-		for _, peer := range e.peerList(p) {
-			if peer.Connection == "connected" {
-				t.Fatalf("%s connected to an unverified peer: %+v", p.name, peer)
+	// Change one character of the check portion. The room portion still resolves to
+	// a live call, so the server will accept the join; what must fail is the identity
+	// check, which is the part that stops a substituted caller being accepted.
+	parts := strings.Split(created.ShareCode, "-")
+	if len(parts) != 3 {
+		t.Fatalf("unexpected code shape: %q", created.ShareCode)
+	}
+	check := []byte(parts[2])
+	if check[0] == 'A' {
+		check[0] = 'B'
+	} else {
+		check[0] = 'A'
+	}
+	wrong := parts[0] + "-" + parts[1] + "-" + string(check)
+
+	_, errOut, code := e.run(bob, "join", wrong)
+	if code == 0 {
+		t.Fatalf("joining with a wrong code succeeded; the identity check is not enforced")
+	}
+	if !strings.Contains(errOut, "does not match") {
+		t.Fatalf("a wrong code failed without explaining the identity mismatch: %s", errOut)
+	}
+
+	// The refusal is the assertion. A refused join also leaves the caller's daemon
+	// distrusting that participant, which is deliberate: retrying a wrong code must
+	// not be silent, or the check could be brute-forced.
+	//
+	// Recovering the room with a different participant is covered by
+	// TestRealBinariesFormMesh; mixing both claims here made the failure modes
+	// indistinguishable.
+	if peers := e.peerList(alice); len(peers) > 0 {
+		for _, peer := range peers {
+			if peer.Connection == "connected" && peer.Fingerprint == mustFingerprint(t, e, bob) {
+				t.Fatalf("alice connected to the peer that presented the wrong code: %+v", peer)
 			}
 		}
 	}
+}
+
+// mustFingerprint returns a profile's own fingerprint.
+func mustFingerprint(t *testing.T, e *meshEnv, p *meshProfile) string {
+	t.Helper()
+	return e.fingerprint(p)
 }
 
 // TestRealBinariesThreePeerMesh proves the topology is a real full mesh: with

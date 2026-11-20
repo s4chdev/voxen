@@ -229,8 +229,13 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 
 	s.closeOnce()
-	// Give in-flight handlers a short window to finish.
-	graceful, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// Let in-flight handlers finish, briefly.
+	//
+	// This must stay short: it is added to audio teardown, and together they are the
+	// worst-case time for "voxen stop" to return. A held-open client connection is not
+	// a reason to delay shutdown - the listener is already closed, so no new work can
+	// arrive and anything in flight can be abandoned safely.
+	graceful, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	for s.active.Load() > 0 && graceful.Err() == nil {
 		time.Sleep(20 * time.Millisecond)

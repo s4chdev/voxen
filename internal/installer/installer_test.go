@@ -40,7 +40,9 @@ func TestInstallCopiesAllBinaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s missing after install: %v", name, err)
 		}
-		if info.Mode().Perm()&0o100 == 0 {
+		// Windows has no POSIX executable bit; the .exe extension is what makes a
+		// binary runnable there.
+		if runtime.GOOS != "windows" && info.Mode().Perm()&0o100 == 0 {
 			t.Fatalf("%s is not executable (mode %04o)", p, info.Mode().Perm())
 		}
 	}
@@ -141,13 +143,18 @@ func TestFailedCopyLeavesNoPartialBinary(t *testing.T) {
 // TestDefaultBinDirHonoursPrefix proves the prefix rules: a prefix ending in "bin" is
 // used as-is, otherwise "bin" is appended.
 func TestDefaultBinDirHonoursPrefix(t *testing.T) {
-	got := DefaultBinDir("/opt/voxen")
-	if got != "/opt/voxen/bin" {
-		t.Fatalf("DefaultBinDir(/opt/voxen) = %q, want /opt/voxen/bin", got)
+	prefix := filepath.Join(string(filepath.Separator), "opt", "voxen")
+	want := filepath.Join(prefix, "bin")
+
+	got := DefaultBinDir(prefix)
+	if got != want {
+		t.Fatalf("DefaultBinDir(%q) = %q, want %q", prefix, got, want)
 	}
-	got = DefaultBinDir("/opt/voxen/bin")
-	if got != "/opt/voxen/bin" {
-		t.Fatalf("DefaultBinDir(/opt/voxen/bin) = %q, want it unchanged", got)
+	// A prefix that already ends in "bin" is used as given, so "--prefix /a/bin"
+	// does not become "/a/bin/bin".
+	got = DefaultBinDir(want)
+	if got != want {
+		t.Fatalf("DefaultBinDir(%q) = %q, want it unchanged", want, got)
 	}
 }
 
